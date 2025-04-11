@@ -1,0 +1,1496 @@
+# Post Name           : LINUXCNC
+# Product             : LATHE
+# Machine Name        : STANDARD MODERN
+# Control Name        : LINUXCNC 2.9
+# Description         : MODIFIED LATHE POST FOR LINUXCNC AND MASTERCAM V9
+# Associated Post     : MPLFAN
+# Mill/Turn           : YES
+# 4-axis/Axis subs.   : YES
+# 5-axis              : NO
+# Subprograms         : YES
+# Canned Cycles       : YES
+# Executable          : MPL v9.0
+#
+# WARNING: THIS POST IS GENERIC AND IS INTENDED FOR MODIFICATION TO
+# THE MACHINE TOOL REQUIREMENTS AND PERSONAL PREFERENCE.
+#
+# --------------------------------------------------------------------------
+# Revision log:
+# --------------------------------------------------------------------------
+# Programmers Note:
+#
+# TRAVIS 11/07/2023  - Lots of things are modified for use with linuxcnc , this post uses controller offsets only
+#                    g33 for spindle sync motion , g33.1 as a canned ridged tap cycle , outputs g43 with every tool change.
+#
+# CNC 01/12/01  -  Initial post update for V8.1, grt
+# CNC 05/17/01  -  Changed parameter that groove 'directcc' was read from, rjm
+# CNC 06/01/01  -  Added 'foundcc = zero' in postblock 'psub_call_s', rjm
+# CNC 06/19/01  -  Altered thread taper calc. for G92 & G76 threading, rjm
+#                  Now takes Acceleration Clearance in account when
+#                  calculating the taper parameter for these cycles.
+#               -  Altered G92 box threading cycle output, rjm
+#                  Force X axis output in 'pthrg92_3' (for spring passes).
+#                  No longer restates 'R' taper value on each 'X' block.
+# CNC 06/25/01  -  Altered to force output of initial G-code on canned cycles.
+# CNC 07/02/01  -  Add cantext to cancel drill and tool retract, jph
+# CNC 07/03/01  -  Changed parameter that groove 'directcc' was read from, rjm
+# CNC 09/05/01  -  In postblock 'pnullspindle' the additional logic of ->, rjm
+#                  'prv_css_actv <> css_actv' was added in 2 if statements.
+#                  This takes care of the unusual (but possible) situation
+#                  were the spindle transitions from CSS -> RPM or RPM -> CSS
+#                  with the SAME speed value at a NULL tlchg.
+#                  Ex: (Going from 400RPM -> 400CSS at a NULL Toolchange)
+#                - Added 'css_start_rpm' switch to allow disabling the
+#                  usual G97S???? RPM initial spindle startup when CSS mode
+#                  is programmed.
+# CNC 09/21/01  -  Modified logic in pmsicint to address bug with MI2 not being read, jce
+# CNC 01/08/02  -  Initial post update for V9.0, rjm
+# CNC 02/12/02  -  Added skeleton code for MiscOps example, grt
+#
+# --------------------------------------------------------------------------
+# Features:
+# --------------------------------------------------------------------------
+#######          MILL/TURN FUNCTIONS SUPPORTED BY THIS POST          #######
+#
+# This post supports Generic Fanuc code output for mill/turn lathes.
+# It is designed to support the features of Mastercam Mill V8.
+#
+# Following Misc. Integers are used:
+#
+# mi1 - Work coordinate system: (home_type)
+#       -1 = Reference return / Tool offset positioning.
+#       0 = G50 with the X and Z home positions.
+#       1 = X and Z home positions.
+#       2 = WCS of G54, G55.... based on Mastercam settings.
+#
+# mi2 - Absolute or Incremental positioning at top level
+#       0 = absolute
+#       1 = incremental
+#
+# mi3 = Select G28 or G30 reference point return:
+#       0 = G28, 1 = G30
+#
+#mi4 = Canned conversion cycle type selection:
+#       Mill-
+#       Activates milling axis conversation canned cycles (G107 or G112).
+#       1 or -1 activates the cycle, the path continues until next entry is
+#       zero, sign switches (1 to -1) forces g113 at null toolchnge, the
+#       cycle changes or the tool changes.
+#
+#Canned text:
+#  Entering cantext within Mastercam allows the following functions to
+#  enable/disable.
+#  cantext value:
+#  1 = Stop =  output the "M00" stop code
+#  2 = Ostop = output the "M01" optional stop code
+#  3 = Bld on = turn on block delete codes in NC lines
+#  4 = bLd off = turn off block delete codes in NC lines
+#  5 = Ret. tlstk =  output the code to retract the tail stock
+#  6 = Adv. tlstk =  output the code to advance the tail stock
+#  7 = Ret. chute =  output the code to retract the chute
+#  8 = Adv. chute =  output the code to advance the chute
+#  9 = Exstp = turn on the exact stop code in the NC line
+#  10 = Exstp = turn off the exact stop code in the NC line
+#  11 to 99 output the value selected
+#
+#TURN TOOLPATHS:
+#Lathe canned cycles:
+# V8 supports lathe canned turning cycles through Mastercam.  This post
+# is configured to process them.
+#
+#MILL TOOLPATHS:
+#Mill Layout:
+# The term "Reference View" refers to the coordinate system associated
+# with the Mill Top view (Alt-F9, the upper gnomon of the three displayed).
+# Create the part drawing with the the axis of rotation along the X axis
+# of the "Mill Reference View" with the face of the part toward the side
+# view (Mill Reference View X plus direction).  The Y plus axis of the
+# Mill Reference View indicates the position on the part of C zero
+# (View number 3).  The right or left side view are the only legal views
+# for face milling.  The view number 3 rotated about the X axis as a
+# "single axis rotation" are the only legal views for cross milling
+# except for axis substitution where the top view is required.
+# Rotation around the part is positive in the CCW direction when viewed
+# from the side view.
+# (The Chook 'CVIEW' should be used for creating milling tool plane and
+# construction plane selections, C axis toolpaths in lathe perform
+# this function automatically).
+#NOTICE: View number 3 always indicates the location for C zero.  Milling
+#        with a turret below the centerline indicates C at 180 degrees.
+#
+#Mill canned cycles:
+#Cylindrical interpolation, G107 canned cycle:
+# Cylindrical interpolation is created with axis substitution only.
+# Use the Caxis/C_axis Contour toolpath.  Create the geometry from
+# view number 4 if the rotation of C axis is CCW.  This prevents producing
+# a mirror image.  Wrapped and unwrapped geometry are broken and arcs are
+# lost so it is better to create flattened geometry.  Set the parameters
+# in Rotary Axis not to 'unroll' and set the correct diameter.
+# Use View number 3 as the C0 location.  Set mi4 to activate!
+#
+#Polar interpolation, G112 canned cycle:
+# Polar interpolation is active only for face cutting (Right or Left).
+# Use the Caxis/Face Contour toolpath.  Create geometry for the lead in
+# and lead out with the start and end position on the View number 3 tool
+# axis.  All paths must start and end at the 'C0'location for output to
+# be correct.  Chain the entire geometry without using Mastercam leads.
+# Set mi4 to activate!
+#
+#Axis substitution:
+# View number 3 is the C zero location on the part and corresponds to the
+# Y zero position of the "Mill Reference View".  Positions are wrapped
+# from and to the diameter of the part as CCW for the Y positive direction.
+# If geometry is drawn from View number 4 (Bottom), it is correct for the
+# wrap/unwrap on the diameter.  The radius of the specified diameter is
+# added to the Z position in the post.  The Y axis is the only axis to
+# be converted with mill/turn.
+#
+#Simultaneous 4 Axis (11 gcode):
+# Full 4 axis toolpaths can be generated from various toolpaths under the
+# 'multi-axis' selection (i.e. Rotary 4 axis). All 5 axis paths are
+# converted to 4 axis paths where only the angle about the rotation axis
+# is resolved. Use View number 3 for the toolplane with all 'multi-axis'.
+# 4 and 5 axis toolpaths are converted assuming cross machining only!
+#
+#Y axis output and machining over part center:
+# Output Y axis motion by setting 'Rotary axis/Y axis' in the NC
+# parameter page and setting y_axis_mch in the post to one.
+# Set 'Rotary axis/Y axis' in a machine with no Y axis (y_axis_mch = 0)
+# to force linear/circular position moves in the XZ plane (g18).
+# This allows machining over the part center.
+#Caution: The machining must stay in the XZ plane at a Y fixed value
+# when y_axis_mch = zero because no C (other than the Tplane) or
+# Y positions are output!!!  This occurs when selecting C_axis/Cross
+# Contour without 'y_axis_mch'.  Use Mill toolpaths for cross profiling.
+#
+#NOTICE: Milling through the part center with a linear move requires the
+#        geometry be broken at the centerline.  Milling through the part
+#        center with an arc move in the G18 plane, no Y axis and on the
+#        negative side of X, reverses only the arc direction and I sign.
+#
+#Additional Notes:
+# 1) G54 calls are generated where the work offset entry of 0 = G54,
+#    1 = G55, etc.
+# 2) Metric is applied from the NCI met_tool variable.
+# 3) The Tplane angle is added to polar conversion and rotary paths.
+# 4) The variable 'absinc' is now pre-defined, set mi2 (Misc. Integer) for
+#    the 'top level' absolute/incremental program output.  Subprograms are
+#    updated through the Mastercam dialog settings for sub-programs.
+# 5) Lathe disables coordinate mirror and rotate subprograms.
+# 6) When creating tools the diameter/radius should end as even numbers
+#    relative to the machine precision. EX. Enter 1.0002 dia. and not
+#    1.0001 dia. with a machine accuracy of .0001.
+# 7) Transform subprograms are intended for use with G54... workshifts.
+# 8) Incremental motion at a toolchange is calculated from the values
+#    entered for home position.
+#
+# --------------------------------------------------------------------------
+# Debugging and program switches
+# --------------------------------------------------------------------------
+m_one       : -1    #Define constant
+zero        : 0     #Define constant
+one         : 1     #Define constant
+two         : 2     #Define constant
+three       : 3     #Define constant
+four        : 4     #Define constant
+five        : 5     #Define constant
+c9k         : 9999  #Define constant
+
+
+fastmode    : yes   #Enable Quick Post Processing, (set to no for debug)
+fastmode    : 1     #Posting speed optimizition
+bug1        : 2     #0=No display, 1=Generic list box, 2=Editor
+bug2        : 30    #Append postline labels, non-zero is column position?
+bug3        : 0     #Append whatline no. to each NC line?
+bug4        : 1     #Append NCI line no. to each NC line?
+whatno      : yes   #Do not perform whatline branches? (leave as yes)
+
+get_1004    : 0     #Find gcode 1004 with getnextop?
+rpd_typ_v7  : 0     #Use Version 7 style contour flags/processing?
+strtool_v7  : 2     #Use Version 7+ toolname?
+tlchng_aft  : 2     #Delay call to toolchange until move line
+cant_tlchng : 1     #Ignore cantext entry on move with tlchng_aft
+newglobal   : 1     #Error checking for global variables
+getnextop   : 1     #Build the next variable table
+cc_1013     : 1     #Read cc_pos on the 1013 line, lathe
+#uselstation: 1     #Use Version 7 mill tool reference
+
+# --------------------------------------------------------------------------
+# General Output Settings
+# --------------------------------------------------------------------------
+sub_level   : 1     #Enable automatic subprogram support
+breakarcs   : 1     #Break arcs, 0 = no, 1 = quadrants, 2 = 180deg. max arcs
+arcoutput   : 0     #0 = IJK, 1 = R no sign, 2 = R signed neg. over 180
+arctype     : 2     #Arc center 1=abs, 2=St-Ctr, 3=Ctr-St, 4=unsigned inc.
+do_full_arc : 0     #Allow full circle output? 0=no, 1=yes
+helix_arc   : 0     #Support helix arc output, 0=no, 1=all planes, 2=XY plane only
+arccheck    : 1     #Convert small arcs to linear, 1=ltol, 2=atol,ltol
+atol        : .01   #Angularity tolerance for arccheck = 2
+ltol        : .002  #Length tolerance for arccheck = 1
+vtol        : .0001 #System tolerance
+maxfeedpm   : 140   #Limit for feed in inch/min
+lcc_move    : .05   #Enter the move in X, Z for lathe canned cycle comp.
+ltol_m      : .05   #Length tolerance for arccheck = 1, metric
+vtol_m      : .0025 #System tolerance, metric
+maxfeedpm_m : 10000 #Limit for feed in mm/min
+lcc_move_m  : 1.25  #Enter the move in X, Z for lathe canned cycle comp.,mm
+
+force_wcs   : yes   #Force WCS output at every toolchange?
+spaces      : 2     #No. of spaces to add between fields
+omitseq     : yes   #Omit sequence no. (use -1 to enable sequence for LCC)
+seqmax      : 9999  #Max. sequence no.
+nobrk       : no    #Omit breakup of x, y & z rapid moves
+progname    : 1     #Use uppercase for program name
+rotaxtyp    : 3     #Rotary axis type for toolplane
+tooltable   : 3     #Read for tool table and pwrtt (3 recalls pwrtt at sof)
+ref_ret     : 0     #G29 / G30 return variable from Mi3
+css_start_rpm : yes #Do direct RPM spindle start prior to CSS ?
+
+
+# --------------------------------------------------------------------------
+# Enable Canned Drill Cycle Postblocks, set for mill and lathe
+# --------------------------------------------------------------------------
+pcuttypldrl   #Change cut parameters for lathe drill
+      usecandrill = 0
+      usecanpeck = 0
+      usecanchip = 0
+      usecantap = 1
+      usecanbore1 = 0
+      usecanbore2 = 0
+      usecanmisc1 = 0
+      usecanmisc2 = 0
+
+pcuttypmdrl   #Change cut parameters for mill drill
+      usecandrill = 1
+      usecanpeck = 1
+      usecanchip = 1
+      usecantap = 1
+      usecanbore1 = 1
+      usecanbore2 = 1
+      usecanmisc1 = 1
+      usecanmisc2 = 0
+
+# --------------------------------------------------------------------------
+# Machine Specific Settings
+# --------------------------------------------------------------------------
+#Machine axis switches, initial
+y_axis_mch  : no    #Machine has Y axis, 0=no, 1=yes
+old_new_sw  : 1     #Switch old (6T), new (0T+) cycle formats, 0=old, 1=new
+wcs_origin  : 0     #Always use the WCS origin for coordinates
+dia_mult    : -1     #Multiplier for output on X axis (Neg. switches sign of X)
+y_mult      : 1     #Multiplier for output on Y axis (Neg. switches sign of Y)
+z_mult      : 1     #Multiplier for output on Z axis (Neg. switches sign of Z)
+dia_shift   : 0     #Shift for output on X axis, radial entry
+y_shift     : 0     #Shift for output on Y axis
+z_shift     : 0     #Shift for output on Z axis
+map_home    : yes   #Use home positions as enterd or map to machine axis
+
+#C axis and Index switches
+str_cax_abs "C"     #String address for absolute rotary axis
+str_cax_inc "H"     #String address for incremental rotary axis
+str_index   "B"     #String address for indexer
+frc_cinit   : 1     #Force C axis reset at toolchange
+c_shift     : 0     #Shift for output on bottom turrets with C axis
+ctol        : 270   #Tolerance in deg. of inc. move before 'rev' flag changes
+ctable      : 15    #Degrees for each index step with indexing spindle
+ixtol       : .01   #Tolerance in deg. for index error
+maxfrdeg    : 2000  #Limit for feed in deg/min
+frdegstp    : 10    #Step limit for rotary feed in deg/min
+
+#Spindle switches and values
+use_gear    : 1      #Output gear selection code, 0=no, 1=yes
+cool_w_spd  : 0      #Output coolant with spindle code, 0=no, 1=yes
+max_speedl0 : 2250   #Maximum spindle speed (lathe), Bottom turret/Left spindle
+min_speedl0 : 20     #Minimum spindle speed
+max_speedm0 : 2500   #Maximum spindle speed (mill)
+min_speedm0 : 50     #Minimum spindle speed
+max_speedl1 : 3600   #Maximum spindle speed (lathe), Top turret/Left spindle
+min_speedl1 : 20     #Minimum spindle speed
+max_speedm1 : 2500   #Maximum spindle speed (mill)
+min_speedm1 : 50     #Minimum spindle speed
+max_speedl2 : 3600   #Maximum spindle speed (lathe), Bottom turret/Right spindle
+min_speedl2 : 20     #Minimum spindle speed
+max_speedm2 : 2500   #Maximum spindle speed (mill)
+min_speedm2 : 50     #Minimum spindle speed
+max_speedl3 : 3600   #Maximum spindle speed (lathe), Top turret/Right spindle
+min_speedl3 : 20     #Minimum spindle speed
+max_speedm3 : 2500   #Maximum spindle speed (mill)
+min_speedm3 : 50     #Minimum switchesspindle speed
+
+#Machining position turret/spindle settings
+# Switch strings based on turret position top/bottom-left/right and cut type.
+# Turret position is based on the Mastercam settings (see lathtype).
+# Strings are re-assigned for output in the routine psw_str_mult.
+# The string variable sw_string holds the place position value to determine
+# how to assign the strings.  Planes are relative to the view from Mastercam.
+# Assign the 17 digit string following the alpha columns below:
+# A - C axis, 1 = axis winds, 2 = axis signed, 3 = indexer
+# B - Spindle direction, 0 = normal, 1 = reverse
+# C - Plane 0 arc/comp, 0 = normal, 1 = switch
+# D - Plane 1 arc/comp, 0 = normal, 1 = switch
+# E - Plane 2 arc/comp, 0 = normal, 1 = switch
+# F - Plane 0, 0 = G17, 1 = G19, 2 = G18
+# G - Plane 1, 0 = G17, 1 = G19, 2 = G18
+# H - Plane 2, 0 = G17, 1 = G19, 2 = G18
+# Decimal (required)
+# I - Plane 0, X axis, 0 = normal, 1 = switch sign from basic
+# J - Plane 0, Y axis, 0 = normal, 1 = switch sign from basic
+# K - Plane 0, Z axis, 0 = normal, 1 = switch sign from basic
+# L - Plane 1, X axis, 0 = normal, 1 = switch sign from basic
+# M - Plane 1, Y axis, 0 = normal, 1 = switch sign from basic
+# N - Plane 1, Z axis, 0 = normal, 1 = switch sign from basic
+# O - Plane 2, X axis, 0 = normal, 1 = switch sign from basic
+# P - Plane 2, Y axis, 0 = normal, 1 = switch sign from basic
+# Q - Plane 2, Z axis, 0 = normal, 1 = switch sign from basic
+use_only_tl : 1     #Use only Top turret/Left spindle settings (below) for
+                    #all Mastercam turret/spindle selections
+                    #When configuring for multi-spindle/turret set to 0
+
+#Columns-    ABCDEFGH.IJKLMNOPQ #Turret/Spindle            #Path Type
+scase_tl_c1  10000222.000000000 #Top turret/Left spindle, Turning cut
+scase_tl_c2  11000012.000000000 #Top turret/Left spindle, Right Face cut
+scase_tl_c_2 11110012.000000000 #Top turret/Left spindle, Left Face cut
+scase_tl_c3  10010102.000000000 #Top turret/Left spindle, Cross cut
+scase_tl_c4c 10000111.000000000 #Top turret/Left spindle, Y axis subs. Cycle
+scase_tl_c4  10000222.000000000 #Top turret/Left spindle, Y axis subs.
+scase_tl_c5  10000222.000000000 #Top turret/Left spindle, Multisurf Rotary
+
+#Columns-    ABCDEFGH.IJKLMNOPQ
+scase_bl_c1  10000222.000000000 #Bottom turret/Left spindle, Turning cut
+scase_bl_c2  11000012.000000000 #Bottom turret/Left spindle, Right Face cut
+scase_bl_c_2 11110012.000000000 #Bottom turret/Left spindle, Left Face cut
+scase_bl_c3  10010102.000000000 #Bottom turret/Left spindle, Cross cut
+scase_bl_c4c 10000111.000000000 #Bottom turret/Left spindle, Y axis subs. Cycle
+scase_bl_c4  10000222.000000000 #Bottom turret/Left spindle, Y axis subs.
+scase_bl_c5  10000222.000000000 #Bottom turret/Left spindle, Multisurf Rotary
+
+#Columns-    ABCDEFGH.IJKLMNOPQ
+scase_tr_c1  10000222.000000000 #Top turret/Right spindle, Turning cut
+scase_tr_c2  11000012.000000000 #Top turret/Right spindle, Right Face cut
+scase_tr_c_2 11110012.000000000 #Top turret/Right spindle, Left Face cut
+scase_tr_c3  10010102.000000000 #Top turret/Right spindle, Cross cut
+scase_tr_c4c 10000111.000000000 #Top turret/Right spindle, Y axis subs. Cycle
+scase_tr_c4  10000222.000000000 #Top turret/Right spindle, Y axis subs.
+scase_tr_c5  10000222.000000000 #Top turret/Right spindle, Multisurf Rotary
+
+#Columns-    ABCDEFGH.IJKLMNOPQ
+scase_br_c1  10000222.000000000 #Bottom turret/Right spindle, Turning cut
+scase_br_c2  11000012.000000000 #Bottom turret/Right spindle, Right Face cut
+scase_br_c_2 11110012.000000000 #Bottom turret/Right spindle, Right Face cut
+scase_br_c3  10010102.000000000 #Bottom turret/Right spindle, Cross cut
+scase_br_c4c 10000111.000000000 #Bottom turret/Right spindle, Y axis subs. Cycle
+scase_br_c4  10000222.000000000 #Bottom turret/Right spindle, Y axis subs.
+scase_br_c5  10000222.000000000 #Bottom turret/Right spindle, Multisurf Rotary
+
+# --------------------------------------------------------------------------
+# Common User-defined Variable Initializations (not switches!)
+# --------------------------------------------------------------------------
+cuttype     : 0     #Flag for cut type
+                    #1 = Lathe
+                    #2 = Right face cut (a = 90)
+                    #-2 = Left face cut  (a = -90)
+                    #3 = Cross cut      (a = 0)
+                    #4 = Y axis substitution
+                    #5 = Multisurf Rotary 4 axis or 11 gcode
+lathtype    : 0     #Lathe turret and spindle selection
+                    #0 = Bottom turret/Left spindle
+                    #1 = Top turret/Left spindle
+                    #2 = Bottom turret/Right spindle
+                    #3 = Top turret/Right spindle
+lathecc     : 0     #Flag for canned turning cycle type
+                    #1 = G71/G72 rough cycle
+                    #2 = G73 pattern repeating cycle
+                    #3 = G74/G75 groove cycle
+                    #4 = Finish pass for types 1 and 2
+                    #Neg.=rough and finish, Pos.=rough only
+millcc      : 0     #Flag for mill conversion cycle type
+
+#Cantext activated flags
+bld         : 0     #Block delete active
+exact       : 0     #Exact stop active
+chute       : 0     #Toggle for part catcher operation
+tlstk       : 0     #Toggle for tailstock operation
+
+#General user variables
+xia         : 0     #Formated absolute value for X
+yia         : 0     #Formated absolute value for Y
+zia         : 0     #Formated absolute value for Z
+cia         : 0     #Formated absolute value for C
+copy_x      : 0     #X value copy, prevent compound operations
+copy_y      : 0     #Y value copy, prevent compound operations
+copy_z      : 0     #Z value copy, prevent compound operations
+xa          : 0     #Absolute coordinate mapped value for X
+ya          : 0     #Absolute coordinate mapped value for Y
+za          : 0     #Absolute coordinate mapped value for Z
+cfeed_x     : 0     #Absolute mapped/rotated unshifted value for X
+cfeed_y     : 0     #Absolute mapped/rotated unshifted value for Y
+cfeed_z     : 0     #Absolute mapped/rotated unshifted value for Z
+xca         : 0     #Absolute unshifted value for XC
+yca         : 0     #Absolute unshifted value for YC
+zca         : 0     #Absolute unshifted value for ZC
+sav_xa      : 0     #X saved value
+sav_ya      : 0     #Z saved value
+sav_za      : 0     #Z saved value
+sav_xh      : 0     #X saved value
+sav_yh      : 0     #Z saved value
+sav_zh      : 0     #Z saved value
+
+conversion  : 12    #Unit conversion value, do not change
+result      : 0     #Return value for functions
+compok      : 1     #Flag to output cutter compensation
+toolchng    : 1     #On a toolchange flag
+plane       : -1    #Initialize plane
+ipr_actv    : -1    #Initialize active feed type
+mach_plane  : 0     #Plane mapped to machine
+sav_arcout  : arcoutput #Arc output type saved
+breakarcss   : breakarcs #Break arcs, 0 = no, 1 = quadrants, 2 = 180deg. max arcs
+
+sav_absinc  : 0     #Saved absolute/Incremental
+spd_rev     : 0     #Flag to reverse spindle direction
+sav_gcode   : 0     #Gcode saved
+sav_feed    : 0     #Feed saved
+sav_ipr     : 0     #IPR saved
+sav_feedcc  : 0     #Feed saved, canned cycle
+sav_iprcc   : 0     #IPR saved, canned cycle
+sav_spdir   : 0     #Spindle direction saved
+sav_omitsq  : 0     #Omitseq saved
+sav_subout  : 0     #Saved subout
+sav_frc_wcs : 0     #Force work offset flag saved
+sav_bug2    : bug2  #Saved setting for bug2
+sav_cutpos2 : 0     #Patch to handle cutpos2 flag through null toolchnages
+cir_at_zero : 0     #Arc center at centerline in XY plane, -1 if not plane 0
+pnt_at_zero : 0     #Position at centerline with milling
+c_ax_flp    : 0     #G18 plane with C axis arcs in neg. range
+home_type   : 0     #Flag for type of home location, read from misc. int.
+rslt_plc    : 0     #Return value from plcval
+rslt_upd    : 0     #Return value from updstr
+
+#Drilling variables
+drlgsel     : -1    #Drill Select Initialize
+drillref    : -1    #Select drill reference
+peckacel    : 0     #Fractional percent to reduce peck2 when usecan.. : no
+mdrl_dir    : 0     #Mill drill direction for boolean, 0 = face, 1 = cross
+zdrl_x      : 0     #Drill point, mapped X
+zdrl_y      : 0     #Drill point, mapped Y
+zdrl_z      : 0     #Drill point, mapped Z
+
+#Threading variables
+nstart_cnt  : 0     #Counter for multiple threads
+thd_vlen    : 0     #Incremental X move for G76 mult starts
+xmaj_thd    : 0     #X major dia. from parameters
+zstrt_thd   : 0     #Z start from parameters
+zend_thd    : 0     #Z end from parameters
+face_thd    : 0     #Face thread from parameters
+
+#Spindle variables
+max_speed   : 0     #Maximum spindle speed (set by turret definition)
+min_speed   : 0     #Minimum spindle speed (set by turret definition)
+speedrpm    : 0     #Spindle calculation RPM
+g_speed     : 0     #Generic positive spindle speed (rpm or css)
+g_spdir     : 0     #Generic spindle direction
+speedx      : 0     #Test spindle calculation X position
+gear_spd    : 0     #Absolute value of gear speed
+
+# Lathe canned cycle variables
+gcodecc     : 0     #Canned turning cycle gcode
+y_axis      : 0     #Flag for Y axis machining (implies over center)
+directcc    : 0     #Direction from parameters
+dopeckcc    : 0     #Do peck from groove parameters
+foundcc     : 0     #Return found from G70 read
+cc_stop_fcc : 0     #Stop output with rough only
+lcc_cc_pos  : 0     #Position for lathe canned cycle cutter comp. enable
+lccdirx     : 0     #Canned cycle X vector direction
+lccdirz     : 0     #Canned cycle Z vector direction
+lcc_xcst    : 0     #Lathe canned cycle contour start position
+lcc_ycst    : 0     #Lathe canned cycle contour start position
+lcc_zcst    : 0     #Lathe canned cycle contour start position
+lcc_xcend   : 0     #Lathe canned cycle contour end position
+lcc_ycend   : 0     #Lathe canned cycle contour end position
+lcc_zcend   : 0     #Lathe canned cycle contour end position
+
+#Vector Varibles for Mapp ing and Rotatary Calculations
+#Lathe - Uses top matrix - initialize here
+m1          : 1
+m5          : 1
+m9          : 1
+
+#C rotation vector
+caxisx      : 0
+caxisy      : 0
+caxisz      : 1
+
+#Mapping matrix
+#Home position mapping matrix
+hmtx1       : 1
+hmtx2       : 0
+hmtx3       : 0
+hmtx4       : 0
+hmtx5       : 1
+hmtx6       : 0
+hmtx7       : 0
+hmtx8       : 0
+hmtx9       : 1
+
+#Cut type mapping matrix
+mmtx1       : 1
+mmtx2       : 0
+mmtx3       : 0
+mmtx4       : 0
+mmtx5       : 1
+mmtx6       : 0
+mmtx7       : 0
+mmtx8       : 0
+mmtx9       : 1
+
+#Side matrix
+smtx1       : 0
+smtx2       : 1
+smtx3       : 0
+smtx4       : 0
+smtx5       : 0
+smtx6       : 1
+smtx7       : 1
+smtx8       : 0
+smtx9       : 0
+
+#Cross matrix
+cmtx1       : -1
+cmtx2       : 0
+cmtx3       : 0
+cmtx4       : 0
+cmtx5       : 0
+cmtx6       : 1
+cmtx7       : 0
+cmtx8       : 1
+cmtx9       : 0
+
+#Back matrix
+bmtx1       : 0
+bmtx2       : -1
+bmtx3       : 0
+bmtx4       : 0
+bmtx5       : 0
+bmtx6       : 1
+bmtx7       : -1
+bmtx8       : 0
+bmtx9       : 0
+
+#Axis Subs matrix
+amtx1       : 1
+amtx2       : 0
+amtx3       : 0
+amtx4       : 0
+amtx5       : 0
+amtx6       : 1
+amtx7       : 0
+amtx8       : 1
+amtx9       : 0
+
+#C-axis variables for calculations
+c_axistype  : 0     #1 = C axis winds-up, 2 = C axis signed absolute
+                    #3 = index positioning (do not set here, use string)
+ipr_type    : 0     #Feedrate for Rotary, 0 = UPM, 1 = DPM
+csav        : 0     #Initial c axis result from pxyzcout call
+czero_csav  : 0     #Save csav when circle at zero detected
+c_wnd       : 0     #Calculation for c axis position tracking (abs-wind)
+prvc_wnd    : 0     #Saved cout calculation from deg., this is cabs in mpfan
+rev         : 0     #C axis wind-up multiplier
+prvfrdeg    : 0     #Feedrate deg/min actual
+circum      : 0     #Circumference
+ldelta      : 0     #Linear distance for deg/min, linear
+cdelta      : 0     #Total linear and angular motion for deg/min
+cldelta     : 0     #Calculation for deg/min, linear and rotary
+sav_rev     : 0     #Saved revolution counter
+indx_out    : c9k   #Rotation direction calculation
+fmt     17  frdeg   #Feedrate deg/min actual
+fmt     20  indx_mc #Rotation direction calculation
+
+#Plane/axis sign modifier (always 1 or -1)
+pl_ax_m0x   : 1
+pl_ax_m0y   : 1
+pl_ax_m0z   : 1
+pl_ax_m1x   : 1
+pl_ax_m1y   : 1
+pl_ax_m1z   : 1
+pl_ax_m2x   : 1
+pl_ax_m2y   : 1
+pl_ax_m2z   : 1
+
+# --------------------------------------------------------------------------
+# Buffer definitions
+# --------------------------------------------------------------------------
+#Buffer 1, toolchange information
+wc1           : 1       #Initial count for write buffer 1
+rc1           : 1       #Initial count for read buffer 1
+nc1           : 2       #Initial count for read buffer 1 into next record
+size1         : 0       #Buffer 1 size
+
+# Current tool information
+c1_gcode      : 0       #Buffer 1
+c1_xh         : 0       #Buffer 1
+c1_yh         : 0       #Buffer 1
+c1_zh         : 0       #Buffer 1
+c1_tox        : 0       #Buffer 1
+c1_toy        : 0       #Buffer 1
+c1_toz        : 0       #Buffer 1
+c1_cc_pos     : 0       #Buffer 1
+c1_tool       : 0       #Buffer 1
+c1_tloffno    : 0       #Buffer 1
+c1_maxss      : 0       #Buffer 1
+c1_ss         : 0       #Buffer 1
+c1_spdir      : 0       #Buffer 1
+c1_css_actv   : 0       #Buffer 1
+c1_fr_pos     : 0       #Buffer 1
+c1_ipr_actv   : 0       #Buffer 1
+c1_coolant    : 0       #Buffer 1
+c1_nextdc     : 0       #Buffer 1
+c1_posttype   : 0       #Buffer 1
+c1_cuttype    : 0       #Buffer 1
+c1_lathtype   : 0       #Buffer 1
+c1_gcodecc    : 0       #Buffer 1
+c1_lathecc    : 0       #Buffer 1
+c1_millcc     : 0       #Buffer 1
+c1_y_axis     : 0       #Buffer 1
+c1_x_min      : 0       #Buffer 1
+c1_x_max      : 0       #Buffer 1
+
+# Next tool information
+n1_gcode      : 0       #Buffer 1
+n1_xh         : 0       #Buffer 1
+n1_yh         : 0       #Buffer 1
+n1_zh         : 0       #Buffer 1
+n1_tox        : 0       #Buffer 1
+n1_toy        : 0       #Buffer 1
+n1_toz        : 0       #Buffer 1
+n1_cc_pos     : 0       #Buffer 1
+n1_tool       : 0       #Buffer 1
+n1_tloffno    : 0       #Buffer 1
+n1_maxss      : 0       #Buffer 1
+n1_ss         : 0       #Buffer 1
+n1_spdir      : 0       #Buffer 1
+n1_css_actv   : 0       #Buffer 1
+n1_fr_pos     : 0       #Buffer 1
+n1_ipr_actv   : 0       #Buffer 1
+n1_coolant    : 0       #Buffer 1
+n1_nextdc     : 0       #Buffer 1
+n1_posttype   : 0       #Buffer 1
+n1_cuttype    : 0       #Buffer 1
+n1_lathtype   : 0       #Buffer 1
+n1_gcodecc    : 0       #Buffer 1
+n1_lathecc    : 0       #Buffer 1
+n1_millcc     : 0       #Buffer 1
+n1_y_axis     : 0       #Buffer 1
+n1_x_min      : 0       #Buffer 1
+n1_x_max      : 0       #Buffer 1
+
+fbuf 1 0 27 0           #Buffer 1
+# --------------------------------------------------------------------------
+#Buffer 2, recall lathe canned turning cycle line numbers
+wc2           : 1       #Initial count for write buffer 2
+rc2           : 1       #Initial count for read buffer 2
+size2         : 0       #Buffer 2 size
+
+fcc_subid     : 0       #Buffer 2
+fcc_ng70s     : 0       #Buffer 2
+fcc_ng70e     : 0       #Buffer 2
+
+fbuf 2 0 3 0            #Buffer 3
+# --------------------------------------------------------------------------
+#Buffer 3, output strings for lathe canned turning cycles
+wc3           : 1       #Initial count for write buffer 3
+rc3           : 1       #Initial count for read buffer 3
+size3         : 0       #Buffer 3 size
+
+string3                 #Buffer 3
+
+fbuf 3 0 80 1           #Buffer 3
+# --------------------------------------------------------------------------
+# Format statements - n=nonmodal, l=leading, t=trailing, i=inc, d=delta
+# --------------------------------------------------------------------------
+#Default english/metric position format statements
+fs2 1   0.7 0.6     #Decimal, absolute, 7 place, default for initialize (:)
+fs2 2   0.4 0.3     #Decimal, absolute, 4/3 place
+fs2 3   0.4 0.3d    #Decimal, delta, 4/3 place
+#Common format statements
+fs2 4   1 0 1 0     #Integer, not leading
+fs2 5   2 0 2 0l    #Integer, force two leading
+fs2 6   3 0 3 0l    #Integer, force three leading
+fs2 7   4 0 4 0l    #Integer, force four leading
+fs2 9   0.1 0.1     #Decimal, absolute, 1 place
+fs2 10  0.2 0.2     #Decimal, absolute, 2 place
+fs2 11  0.3 0.3     #Decimal, absolute, 3 place
+fs2 12  0.4 0.4     #Decimal, absolute, 4 place
+fs2 13  0.5 0.5     #Decimal, absolute, 5 place
+fs2 14  0.3 0.3d    #Decimal, delta, 3 place
+fs2 15  0.2 0.1     #Decimal, absolute, 2/1 place
+fs2 16  0 4 0 4t    #No decimal, absolute, 4 trailing
+#Default english/metric feed format statements
+fs2 17  0.2 0.1     #Decimal, absolute, 2/1 place
+fs2 18  0.4 0.3     #Decimal, absolute, 4/3 place
+fs2 19  0.5 0.4     #Decimal, absolute, 5/4 place
+fs2 20  1 0 1 0n    #Integer, forced output
+
+# --------------------------------------------------------------------------
+#String and string selector definitions for NC output
+# --------------------------------------------------------------------------
+#Address string definitions
+stra        "A"     #String for address A
+strd        "D"     #String for address D
+stre        "K"     #String for address E
+strf        "F"     #String for address F
+stri        "I"     #String for address I
+strk        "K"     #String for address K
+strm        "M"     #String for address M
+stro        "O"     #String for address O
+strp        "P"     #String for address P
+strq        "Q"     #String for address Q
+stru        "U"     #String for address U
+strw        "W"     #String for address W
+srad        "R"     #String for address R (radius)
+srminus     "R-"    #String for address R- (minus radius)
+sc_minus    "-"     #Manipulated string for signed rotary minus
+
+#Tool note
+stoper              #String for tool notes
+stinsert    " INSERT - "#String for tool notes
+stinsert2           #String for tool notes
+
+#String definitions
+sg50        "D"   #String for spindle clamp and work coordinate
+
+#Cantext string definitions (spaces must be padded here)
+sm00        "M00"   #String for stop
+sm01        "M01"   #String for optional stop
+strtextno           #String for cantext
+strcantext          #String for cantext
+
+sblank              #Empty string
+sw_string           #String for lathe turret type settings
+# --------------------------------------------------------------------------
+# Error message strings
+# --------------------------------------------------------------------------
+saxiserror  "ERROR-WRONG AXIS OF ROTATION, ROTATE ON X AXIS OF WCS"
+sindxerror  "WARNING-INDEX ANGLE DOES NOT MATCH POST SETTING ('ctable')"
+ssignerror  "WARNING-SIGNED AXIS POSITIONING MOVE OVER 360 DEGREES"
+swrkserror  "WARNING-WORK OFFSET IS CHANGED IN A SUBPROGRAM"
+stoperror   "ERROR-AXIS SUBSTITUTION MUST USE THE TOP TOOLPLANE"
+scutterror  "ERROR-A VALID CUT TYPE WAS NOT FOUND, CHECK ROTARY SETTINGS"
+sfccerror   "ERROR-MATCHING G70 FINISH PROFILE WAS NOT FOUND"
+s5drlerror  "ERROR-5 AXIS DRILLING REQUIRES LONG CYCLE ('usecan..')"
+slthrmerror "ERROR-ROTATE/MIRROR SUBPROGRAM NOT ALLOWED WITH LATHE PATH"
+smilrmerror "ERROR-ROTATE/MIRROR PROGRAM ROUTINE NOT ALLOWED"
+smny50error "ERROR-G50 AND HOME ('mi1') DOES NOT SUPPORT MULTIPLE TOOL SUBPROGRAM"
+shomeserror "ERROR-HOME ('mi1') DOES NOT SUPPORT TRANSFORM SUBPROGRAM"
+symoterror  "WARNING-Y AXIS MOTION AND ('y_axis_mch') NOT SET"
+
+# --------------------------------------------------------------------------
+# General G and M Code String select tables
+# --------------------------------------------------------------------------
+# Strings for switch based on planes, see psw_str_mult
+sxg02   G3      #Circular interpolation CW
+sxg03   G2      #Circular interpolation CCW
+# --------------------------------------------------------------------------
+# Motion G code selection
+sg00    G0      #Rapid
+sg01    G1      #Linear feed
+sg02    G3      #Circular interpolation CW
+sg03    G2      #Circular interpolation CCW
+sg04    G4      #Dwell
+sgcode          #Target for string
+
+fstrsel sg00 gcode sgcode
+# --------------------------------------------------------------------------
+# Motion G code selection, plane 1
+sg00_1  G0      #Rapid
+sg01_1  G1      #Linear feed
+sg02_1  G2      #Circular interpolation CW
+sg03_1  G3      #Circular interpolation CCW
+sg04_1  G4      #Dwell
+sgcode1         #Target for string
+
+fstrsel sg00_1 gcode sgcode1
+# --------------------------------------------------------------------------
+# Motion G code selection, plane 2
+sg00_2  G0      #Rapid
+sg01_2  G1      #Linear feed
+sg02_2  G2      #Circular interpolation CW
+sg03_2  G3      #Circular interpolation CCW
+sg04_2  G4      #Dwell
+sgcode2         #Target for string
+
+fstrsel sg00_2 gcode sgcode2
+# --------------------------------------------------------------------------
+# Strings for switch based on planes, see psw_str_mult
+sxg17   G17     #XY plane code
+sxg19   G19     #YZ plane code
+sxg18   G18     #XZ plane code
+swstr              #Target for string
+
+fstrsel sxg17 rslt_plc swstr
+# --------------------------------------------------------------------------
+# Select work plane G code
+sg17    G17     #XY plane code
+sg19    G19     #YZ plane code
+sg18    G18     #XZ plane code
+sgplane            #Target string
+
+fstrsel sg17 plane sgplane
+# --------------------------------------------------------------------------
+#Select english/metric code
+sg20    G20     #Inch code
+sg21    G21     #Metric code
+smetric         #Target string
+
+fstrsel sg20 met_tool smetric
+# --------------------------------------------------------------------------
+#Select reference return code
+sg28    G28     #First reference point return
+sg30    G30     #Second reference point return
+sg28ref         #Target string
+
+fstrsel sg28 ref_ret sg28ref
+# --------------------------------------------------------------------------
+# Strings for switch based on planes, see psw_str_mult
+sxg41   G41     #Cutter compensation left
+sxg42   G42     #Cutter compensation right
+# --------------------------------------------------------------------------
+# Cutter compensation G code selection, plane 0
+sg40    G40     #Cancel cutter compensation
+sg41    G41     #Cutter compensation left
+sg42    G42     #Cutter compensation right
+sccomp          #Target for string
+
+fstrsel sg40 cc_pos sccomp
+# --------------------------------------------------------------------------
+# Cutter compensation G code selection, plane 1
+sg40_1  G40     #Cancel cutter compensation
+sg41_1  G41     #Cutter compensation left
+sg42_1  G42     #Cutter compensation right
+sccomp1         #Target for string
+
+fstrsel sg40_1 cc_pos sccomp1
+# --------------------------------------------------------------------------
+# Cutter compensation G code selection, plane 2
+sg40_2  G40     #Cancel cutter compensation
+sg41_2  G41     #Cutter compensation left
+sg42_2  G42     #Cutter compensation right
+sccomp2         #Target for string
+
+fstrsel sg40_2 cc_pos sccomp2
+# --------------------------------------------------------------------------
+# Select canned cycle type, profile is direction of finish profile vector
+sthdg32 G33     #Cycle type G33
+sthdg76 G76     #Cycle type G76
+sthdg92 G92     #Cycle type G92
+sthdg33 G33     #Cycle type G33 with alternating position
+sthdgcode       #Target for string
+
+fstrsel sthdg32 thdtype sthdgcode
+# --------------------------------------------------------------------------
+# Select canned cycle type
+sg70    G70     #Cycle type G70
+sg71    G71     #Cycle type G71
+sg72    G72     #Cycle type G72
+sg73    G73     #Cycle type G73
+sg74    G74     #Cycle type G74
+sg75    G75     #Cycle type G75
+scclgcode       #Target for string
+
+fstrsel sg70 gcodecc scclgcode
+# --------------------------------------------------------------------------
+# Canned drill cycle string select
+sg80_f  G81     #drill face
+sg80_fd G82     #drill face w/dwell
+sg81_f  G83     #peck face
+sg81_fd G83     #peck face w/dwell
+sg82_f  G83     #chpbrk face
+sg82_fd G83     #chpbrk face w/dwell
+sg83_f  G84     #tap right face
+sg83_fd G84     #tap left face
+sg84_f  G85     #bore1 face
+sg84_fd G85     #bore1 face w/dwell
+sg85_f  G86     #bore2 face
+sg85_fd G88     #bore2 face w/dwell
+sg86_f  G87     #misc1 face
+sg86_fd G87     #misc1 face w/dwell
+sg87_f  G8?     #misc2 face
+sg87_fd G8?     #misc2 face w/dwell
+sgdrillf        #Target for string
+
+fstrsel sg80_f drlgsel sgdrillf
+# --------------------------------------------------------------------------
+sg80_c  G81     #drill cross
+sg80_cd G82     #drill cross w/dwell
+sg81_c  G83     #peck cross
+sg81_cd G83     #peck cross w/dwell
+sg82_c  G87     #chpbrk cross
+sg82_cd G87     #chpbrk cross w/dwell
+sg83_c  G88     #tap right cross
+sg83_cd G88     #tap left cross
+sg84_c  G89     #bore1 cross
+sg84_cd G89     #bore1 cross w/dwell
+sg85_c  G86     #bore2 cross
+sg85_cd G88     #bore2 cross w/dwell
+sg86_c  G87     #misc1 cross
+sg86_cd G87     #misc1 cross w/dwell
+sg87_c  G8?     #misc2 cross
+sg87_cd G8?     #misc2 cross w/dwell
+sgdrillc        #Target for string
+
+fstrsel sg80_c drlgsel sgdrillc
+# --------------------------------------------------------------------------
+# Select incremental or absolute G code
+sg90    G90     #Absolute code
+sg91    G91     #Incremental code
+sgabsinc        #Target string
+
+fstrsel sg90 absinc sgabsinc
+# --------------------------------------------------------------------------
+# RPM/CSS code selection
+sg97    G97     #RPM
+sg96    G96     #CSS
+sg9697          #Target for string
+
+fstrsel sg97 css_actv sg9697
+# --------------------------------------------------------------------------
+# Feed mode G code selection
+sg98    G94     #UPM
+sg99    G95     #UPR
+sgfeed          #Target for string
+
+fstrsel sg98 ipr_actv sgfeed
+# --------------------------------------------------------------------------
+# C axis cycles
+sg107   G107    #C axis cylindrical interpolation enable
+sg108   G107    #C axis cylindrical interpolation disable
+sg112   G112    #C axis face polar interpolation enable
+sg113   G113    #C axis face polar interpolation disable
+# --------------------------------------------------------------------------
+#Canned drill cycle reference height
+sg198   #G198   #Reference at initht
+sg199   #G199   #Reference at refht
+sgdrlref        #Target for string
+
+fstrsel sg198 drillref sgdrlref
+# --------------------------------------------------------------------------
+# Generate string for spindle, lathe
+sm04    M04     # Spindle reverse - no coolant
+sm05    M05     # Spindle off     - no coolant
+sm03    M03     # Spindle forward - no coolant
+sm14    M14     # Spindle reverse - coolant
+sm05c   M15     # Spindle off     - coolant
+sm13    M13     # Spindle forward - coolant
+spindle_l       #Target for string
+
+fstrsel sm04 g_spdir spindle_l
+# --------------------------------------------------------------------------
+# Coolant M code selection
+sm09    M9      #Coolant Off
+sm08    M8      #Coolant Flood
+sm08_1  M8      #Coolant Mist
+sm08_2  M8      #Coolant Tool
+scoolant        #Target for string
+
+# --------------------------------------------------------------------------
+#linuxcnc tool change
+sm06    M06     #change tool
+sm43    G43     #length offset
+sg07    G07     #diameter mode
+sg08    G08     #radius mode
+sg91_1  G91.1   #incremental arcs
+sg90_1  G90.1   #absolute arcs
+sthdg33_1 G33.1 #ridgid tap
+
+fstrsel sm09 coolant scoolant
+# --------------------------------------------------------------------------
+# Table rotation direction, index
+sindx_cw   M22   #Rotate CW code
+sindx_ccw  M21   #Rotate CCW code
+sindx_mc        #Target for string
+
+fstrsel sindx_cw indx_mc sindx_mc
+# --------------------------------------------------------------------------
+# C axis mode
+sm23    M23     #C axis enable
+sm24    M24     #C axis disable
+
+# --------------------------------------------------------------------------
+# Tailstock M code selection
+sm26    M26     #Tailstock retracted
+sm25    M25     #Tailstock engaged
+stlstk          #Target for string
+
+fstrsel sm26 tlstk stlstk
+# --------------------------------------------------------------------------
+# Generate string for spindle, mill
+sm52    M52     # Spindle reverse - no coolant
+sm55    M55     # Spindle off     - no coolant
+sm51    M51     # Spindle forward - no coolant
+sm54    M54     # Spindle reverse - coolant
+sm55c   M55     # Spindle off     - coolant
+sm53    M53     # Spindle forward - coolant
+spindle_m       #Target for string
+
+fstrsel sm52 g_spdir spindle_m
+# --------------------------------------------------------------------------
+# Chute M code selection
+sm73    M73     #Chute retracted
+sm74    M74     #Chute engaged
+schute          #Target for string
+
+fstrsel sm73 chute schute
+# --------------------------------------------------------------------------
+# Define the gear selection code
+flktbl  1       3       #Lookup table definition - table no. - no. entries
+        101      0       #Low gear range
+        102      650     #Med gear range
+        103      1200    #Hi gear range
+
+# --------------------------------------------------------------------------
+# Toolchange / NC output Variable Formats
+# --------------------------------------------------------------------------
+fmt  T  7   toolno      #Tool number
+fmt  G  4   g_wcs       #WCS G address
+fmt  P  4   p_wcs       #WCS P address
+fmt  S  4   speed       #Spindle Speed
+fmt  M  4   gear        #Gear range
+fmt    4   maxss       #RPM spindle speed
+# --------------------------------------------------------------------------
+fmt  N  4   n           #Sequence number
+fmt  X  2   xabs        #X position output
+fmt  Y  2   yabs        #Y position output
+fmt  Z  2   zabs        #Z position output
+fmt  U  3   xinc        #X position output
+fmt  V  3   yinc        #Y position output
+fmt  W  3   zinc        #Z position output
+fmt  C  11  cabs        #C axis position
+fmt  H  14  cinc        #C axis position
+fmt  B  4   indx_out    #Index position
+fmt  I  3   iout        #Arc center description in X
+fmt  J  3   jout        #Arc center description in Y
+fmt  K  3   kout        #Arc center description in Z
+fmt  R  2   arcrad      #Arc Radius
+fmt  F  18  feed        #Feedrate
+fmt  P  11  dwell       #Dwell
+fmt  M  5   cantext     #Default cantext
+fmt  C  2   crad        #C axis start radius, G107
+fmt  H  2   tlrad       #C axis cancel, G112, currently using C position
+# --------------------------------------------------------------------------
+#Move comment (pound) to output colon with program numbers
+fmt  O  7   progno      #Program number
+#fmt ":" 7   progno      #Program number
+fmt  O  7   main_prg_no #Program number
+#fmt ":" 7   main_prg_no #Program number
+fmt  O  7   sub_prg_no  #Program number
+#fmt ":" 7   sub_prg_no  #Program number
+fmt  U  2   sub_trnsx   #Rotation point
+fmt  V  2   sub_trnsy   #Rotation point
+fmt  W  2   sub_trnsz   #Rotation point
+# --------------------------------------------------------------------------
+# Drill output
+# --------------------------------------------------------------------------
+fmt  R  2   refht_a     #Reference height
+fmt  R  2   refht_i     #Reference height
+fmt  X  2   initht_x    #Initial height, mapped X
+fmt     2   initht_y    #Initial height, mapped Y
+fmt  Z  2   initht_z    #Initial height, mapped Z
+fmt  X  2   refht_x     #Reference height, mapped X
+fmt     2   refht_y     #Reference height, mapped Y
+fmt  Z  2   refht_z     #Reference height, mapped Z
+fmt  X  2   depth_x     #Depth, mapped X
+fmt     2   depth_y     #Depth, mapped Y
+fmt  Z  2   depth_z     #Depth, mapped Z
+fmt  Q  2   peck1       #First peck increment (positive)
+fmt     2   peck2       #Second or last peck (positive)
+fmt  R  2   peckclr     #Safety distance
+fmt     2   retr        #Retract height
+fmt  Q  2   shftdrl     #Fine bore tool shift
+# --------------------------------------------------------------------------
+# Thread output
+# --------------------------------------------------------------------------
+fmt  P  2   thddepth    #Thread height absolute
+fmt  J  2   thdfirst    #First depth cut in thread
+fmt  Q  2   thdlast     #Last depth cut in thread
+fmt  R  2   thdfinish   #G76 thread finish allowance
+fmt  R  3   thdrdlt     #Thread R delta G92 and G76
+fmt  U  3   thd_dirx    #Incremental X move for G76 mult starts
+fmt  W  3   thd_dirz    #Incremental Z move for G76 mult starts
+fmt  H  5   nspring     #Number of spring cuts
+fmt     5   thdpull     #G76 thread pull off
+fmt  Q  5   thdang      #G76 threading angle
+# --------------------------------------------------------------------------
+# Canned cycle output format (do not change order, used by buffer 2)
+# --------------------------------------------------------------------------
+fmt  U  2   depthcc
+fmt  R  2   clearcc
+fmt  U  2   xstckcc
+fmt  W  2   zstckcc
+fmt  R  4   ncutscc
+fmt     2   stepcc
+fmt  P  4   ng70s       #P line number in canned cycle
+fmt  Q  4   ng70e       #Q line number in canned cycle
+fmt  U  2   g73x        #Stored offset of canned cycle rough cut G73
+fmt  V  2   g73y        #Stored offset of canned cycle rough cut G73
+fmt  W  2   g73z        #Stored offset of canned cycle rough cut G73
+fmt  P  2   grvspcc
+fmt  Q  2   grvdpcc
+# --------------------------------------------------------------------------
+fmt "TOOL - "       4   tnote       # Note format
+fmt " OFFSET - "    4   toffnote    # Note format
+
+# --------------------------------------------------------------------------
+# Parameter information lookup tables, see pparameter
+# --------------------------------------------------------------------------
+fprmtbl 1 5 #Rough cut parameters
+        10200 depthcc
+        10201 clearcc
+        10202 xstckcc
+        10203 zstckcc
+        10214 directcc
+
+fprmtbl 2 4 #Finish cut parameters
+        10100 ncutscc
+        10101 depthcc
+        10102 xstckcc
+        10103 zstckcc
+
+fprmtbl 3 5 #Groove cut parameters
+        10301 stepcc
+        10306 directcc
+        10312 dopeckcc
+        10316 depthcc
+        10320 clearcc
+
+fprmtbl 104 4 #Thread cut parameters
+        10411 xmaj_thd
+        10413 zstrt_thd
+        10414 zend_thd
+        10419 face_thd
+
+# --------------------------------------------------------------------------
+# Tool Comment / Manual Entry Section
+# --------------------------------------------------------------------------
+pparameter      #Information from parameters
+      if prmcode = 10000, stoper = sparameter
+      if prmcode = 20103, stinsert2 = sparameter
+      result = fprm (abs(lathecc))
+
+ptoolcomment    #Comment for tool
+      tnote = abs(t)
+      toffnote = tloffno
+      strtool = ucase(strtool)
+      stoper = ucase(stoper)
+      stinsert2 = ucase(stinsert2)
+      "(", *tnote, ")", e
+      if posttype = two,
+        "(", *stoper, " ", *strtool, " ", *stinsert, *stinsert2, ")", e
+      else,
+        "(", *stoper, " ", *strtool, ")", e
+
+pcomment        #Comment from manual entry (must call pcomment2 if booleans)
+      pcomment2
+
+pcomment2       #Comment from manual entry
+      scomm = ucase(scomm)
+      if gcode = 1007, "(", scomm, ")"
+      else, "(", scomm, ")", e
+
+# --------------------------------------------------------------------------
+# Start of File and Toolchange Setup
+# --------------------------------------------------------------------------
+pheader         #Start of file
+      "%", e
+      pbld, n, *smetric, sg90, sg18, sg08, sg91_1, e
+      "(", progname, "  ", date, "  ", time, ")", e
+
+
+lsof0           #Start of file for tool zero, lathe
+      lsof
+
+lsof            #Start of file for non-zero tool number, lathe
+      ltlchg
+
+msof0           #Start of file for tool zero, mill
+      msof
+
+msof            #Start of file for non-zero tool number, mill
+      mtlchg
+
+ltlchg          #Toolchange, lathe
+      toolchng = one
+      gcode = zero
+      copy_x = vequ(x)
+      pcc_capture   #Capture LCC ends, stop output RLCC
+      c_rcc_setup   #Save original in sav_xa and shift copy_x for LCC comp.
+      pcom_moveb    #Get machine position, set inc. from c1_xh
+      c_mmlt        #Position multi-tool sub, sets inc. current if G54...
+      ptoolcomment
+      comment
+      if home_type < two, #Toolchange G50/home/reference position
+        [
+        sav_xh = vequ(copy_x)
+        sav_absinc = absinc
+        absinc = zero
+        pmap_home   #Get home position, xabs
+        ps_inc_calc #Set start position, not incremental
+        #Toolchange home position
+        if home_type = one,
+          pbld, n, *sgcode, pfxout, pfyout, pfzout, e
+        else,
+          [
+          #Toolchange g50 position
+          pbld, n, *sg28ref, e
+          toolno = t * 1
+          if home_type = m_one, pbld, n, *sgcode, *toolno, sm06, sm43, e
+          else, pbld, n, *sg50, pfxout, pfzout, e
+          ]
+        pe_inc_calc #Update previous
+        absinc = sav_absinc
+        copy_x = vequ(sav_xh)
+        ]
+      toolno = t * 1
+      pbld, n, *sgcode, *toolno, sm06, sm43, e
+      pbld, n, pfsgplane, e
+      pcaxis_off_l  #Postblock for lathe transition
+      pcom_moveb    #Reset machine position, set inc. from last position
+      pcan
+      pspindle
+      #Added for 'css_start_rpm' logic (09/05/01)
+      if css_actv,
+        [
+        if css_start_rpm,
+          prpm # Direct RPM startup for programmed CSS
+        else,
+          pbld, pcssg50, pcss # NO RPM start - just output the CSS
+        ]
+      else, # Direct RPM was programmed
+        [
+        prpm # Output programmed RPM
+        ]
+      sav_absinc = absinc
+      if home_type > one, absinc = zero
+      pcan1, pbld, n, psccomp, *sgcode, pwcs, pfxout, pfzout,
+        pfscool, strcantext, e
+      if lcc_cc_pos, plcc_cc_pos  #Use sav_xa to position with comp. LCC
+      pcom_movea    #Update previous, pcan2
+      ps_inc_calc   #Reset current
+      absinc = sav_absinc
+      #Added for 'css_start_rpm' logic (09/05/01)
+      if css_start_rpm,
+        pbld, pcssg50, pcss # CSS output AFTER a G97S???? RPM spindle startup
+      c_msng        #Position single-tool sub, sets inc. current if G54...
+      toolchng = zero
+
+mtlchg          #Toolchange, mill
+      toolchng = one
+      gcode = zero
+      copy_x = vequ(x)
+      pcom_moveb    #Get machine position, set inc. from c1_xh
+      c_mmlt        #Position multi-tool sub, sets inc. current if G54...
+      ptoolcomment
+      comment
+
+
+      if home_type < two, #Toolchange G50/home/reference position
+        [
+        sav_xh = vequ(copy_x)
+        sav_absinc = absinc
+        absinc = zero
+        pmap_home   #Get home position, xabs
+        ps_inc_calc #Set start position, not incremental
+        #Toolchange home position
+        if home_type = one,
+          pbld, n, *sgcode, pfxout, pfyout, pfzout, e
+        else,
+          [
+          #Toolchange g50 position/reference
+          pbld, n, *sg28ref, "U0.", [if y_axis_mch, "V0."], "W0.", e
+          toolno = t * 1
+          if home_type = m_one, pbld, n, *sgcode, *toolno, sm43, e
+          else, pbld, n, *sg50, pfxout, pfyout, pfzout, e
+          ]
+        pe_inc_calc #Update previous
+        absinc = sav_absinc
+        copy_x = vequ(sav_xh)
+        ]
+      toolno = t * 1
+      pbld, n, *sgcode, *toolno, sm43, e
+      pbld, n, pfsgplane, e
+      pcom_moveb    #Reset machine position, set inc. from last position
+      pcaxis_on_m   #Postblock for mill transition
+      pcan
+      sav_absinc = absinc
+      if home_type > one, absinc = zero
+      pcan1, pbld, n, *sgcode, pwcs, pfxout, pyout, pfzout, strcantext, e
+      pbld, n, pfcout, e
+      pindex
+      pbld, n, pfscool, e
+      pspindle
+      prpm
+      pcom_movea    #Update previous, pcan2
+      ps_inc_calc   #Reset current
+      absinc = sav_absinc
+      c_msng        #Position single-tool sub, sets inc. current if G54...
+      toolchng = zero
+      if millcc,
+        [
+        pmillccb #Set mill conversion
+        pmillcca #End mill conversion
+        ]
+
+ltlchg0         #Call from NCI null tool change, lathe
+      copy_x = vequ(x)
+      c_rcc_setup   #Save original in sav_xa and shift copy_x for LCC comp.
+      pcom_moveb    #Get machine position, set inc. from last position
+      c_mmlt        #Position multi-tool sub, sets inc. current if G54...
+      comment
+      pcan
+      toolno = t * 1
+      pbld, n, toolno, sm43, e
+      pbld, n, psgplane, e
+      pcaxis_off_l  #Postblock for lathe transition
+      pspindle
+      pnullspindle
+      pbld, n, pscool,e
+      if home_type > one & workofs <> prv_workofs,
+        [
+        sav_absinc = absinc
+        absinc = zero
+        pbld, n, psgcode, pwcs, pfxout, pfyout, pfzout, e
+        pe_inc_calc #Update previous
+        ps_inc_calc #Set current inc.
+        absinc = sav_absinc
+        ]
+      if gcode = one, plinout
+      else, prapidout
+      if lcc_cc_pos, plcc_cc_pos  #Use sav_xa to position with comp. LCC
+      pcom_movea
+      c_msng #Single tool subprogram call
+
+mtlchg0         #Call from NCI null tool change, mill
+      copy_x = vequ(x)
+      pcom_moveb    #Get machine position, set inc. from last position
+      c_mmlt        #Position multi-tool sub, sets inc. current if G54...
+      comment
+      pcan
+      pbld, n, toolno, sm43, e
+      pbld, n, psgplane, e
+      pspindle
+      pcaxis_on_m   #Postblock for mill transition
+      pnullspindle
+      pbld, n, pscool,e
+      if home_type > one & workofs <> prv_workofs,
+        [
+        sav_absinc = absinc
+        absinc = zero
+        pbld, n, psgcode, pwcs, pfxout, pfyout, pfzout, pfcout, e
+        pe_inc_calc #Update previous
+        ps_inc_calc #Set current inc.
+        absinc = sav_absinc
+        ]
+      pindex
+      ppos_cax_lin  #Position C axis, toolplane or CL
+      if millcc, pmillccb #Set mill conversion
+      if gcode = one, plinout
+      else, prapidout
+      if millcc, pmillcca #End mill conversion
+      pcom_movea    #Update previous, pcan2
+      c_msng #Single tool subprogram call
+
+ptoolend        #Read from buffer 1 for prv_, current and next tool info
+                #end tool here, current and next valid
+      sav_rev = rev #Axis Sub does not update to rev
+      pcan
+      if n1_gcode <> 1000,
+        [
+        toolno = t * 1
+        sav_gcode = gcode
+        gcode = zero
+        coolant = zero
+        pbld, n, pfscool, e
+        if posttype = two, pl_retract
+        else, pm_retract
+        if n1_gcode <> 1003, pbld, n, "M01", e
+        gcode = sav_gcode
+        ]
+      else, #Null toolchange
+        [
+        if n1_posttype <> posttype, pcan1, pbld, n, pnullstop, strcantext, e
+        ]
+      pcan2
+      #Update current variables to prv_ needed in comparisons
+      !posttype
+      if rc1 < size1, preadcur_nxt
+
+pl_retract      #Retract tool based on next tool gcode, lathe (see ptoolend)
+      cc_pos = zero
+      if home_type = one,
+        [
+        pmap_home   #Get home position, xabs
+        ps_inc_calc #Set inc.
+        pbld, n, psccomp, e
+        pcan1, pbld, n, *sgcode, pfxout, pfzout, *toolno, sm43, strcantext, e
+        pbld, n, pnullstop, e
+        ]
+      else,
+        [
+        #Retract to reference return
+        pbld, n, `sgcode, psccomp, e
+        if home_type = m_one, pbld, n, *toolno, sm43, e
+        pcan1, pbld, n, *sg28ref
+          pnullstop, strcantext, e
+        if home_type > m_one, pbld, n, *toolno, sm43, e
+        ]
+
+pm_retract      #Retract tool based on next tool gcode, mill (see ptoolend)
+      if home_type = one,
+        [
+        pmap_home   #Get home position, xabs
+        if frc_cinit, cabs = zero
+        ps_inc_calc #Set inc.
+        pbld, n, psccomp, e
+        pcan1, pbld, n, *sgcode, pfxout, pfyout, pfzout, protretinc,
+          *toolno, sm43, strcantext, e
+        pbld, n, pnullstop, e
+        ]
+      else,
+        [
+        #Retract to reference return
+        pbld, n, `sgcode, psccomp, e
+        if home_type = m_one, pbld, n, *toolno, sm43, e
+        pcan1, pbld, n, *sg28ref, "U0.", [if y_axis_mch, "V0."], "W0.",
+          protretinc, pnullstop, strcantext, e
+        if home_type > m_one, pbld, n, *toolno, sm43, e
+        ]
+
+protretinc      #Reset the C axis revolution counter
+      if frc_cinit,
+        [
+        rev = zero
+        sav_rev = zero
+        cabs = zero
+        csav = zero
+        c_wnd = zero
+        prvc_wnd = zero
+        indx_out = zero
+        if c_axistype = one,
+          [
+          if home_type = one, pfcout
+          else,
+            [
+            cinc = zero
+            *cinc
+            ]
+          ]
+        else,
+          [
+          pindxcalc
+          if c_axistype = three,
+            [
+            indx_out = cabs
+            e, pbld, n, pindex
+            ]
+          else, pfcout
+          ]
+        !csav, !cabs, !c_wnd
+        ]

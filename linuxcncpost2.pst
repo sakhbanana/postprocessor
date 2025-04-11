@@ -1,0 +1,1487 @@
+
+peof0           #End of file for tool zero
+      peof
+
+peof            #End of file for non-zero tool
+      ptoolend
+      comment
+      n, "M30", e
+      mergesub
+      clearsub
+      mergeaux
+      clearaux
+      "%", e
+
+pwcs            #G54+ coordinate setting at toolchange
+      if home_type > one,
+        [
+        sav_frc_wcs = force_wcs
+        if sub_level, force_wcs = zero
+        if workofs <> prv_workofs | (force_wcs & toolchng),
+          [
+          if sub_level, result = mprint(swrkserror)
+          if workofs < 6,
+            [
+            g_wcs = workofs + 54
+            *g_wcs
+            ]
+          else,
+            [
+            p_wcs = workofs - five
+            "G54.1", *p_wcs
+            ]
+          ]
+        force_wcs = sav_frc_wcs
+        !workofs
+        ]
+
+#Rc1 is used to flag the SOF, rc1 = two at SOF
+pcaxis_off_l    #Toolchange C axis disable, lathe, check prv_ to current
+      if rc1 > two & prv_posttype <> two, pbld, n, *sm24, e
+
+pcaxis_on_m     #Toolchange C axis enable, mill, check prv_ to current
+      if (rc1 = two | prv_posttype = two),
+        [
+        pbld, n, *sm23, e
+        if nextdc = three, pbld, n, "M49", e  #Disable tap
+        ]
+
+plcc_cc_pos     #Position for lathe canned cycle cutter comp. enable
+                #Position saved in prcc_setup
+      pe_inc_calc   #Update previous
+      copy_x = vequ(sav_xa)
+      pcom_moveb    #Get machine position, set inc. from previous
+      #Force comp from the finish profile
+      compok = one
+      cc_pos = n1_cc_pos
+      if gcode = zero, prapidout
+      else, plinout
+      lcc_cc_pos = zero
+
+pgear           #Use spindle gear range, find gear from RPM at X min.
+      if use_gear = one,
+        [
+        if lathtype = zero | lathtype = two, x_min = c1_x_max
+        else, x_min = c1_x_min
+        x_min = x_min + c1_tox  #Correction for workshift
+        if x_min = zero, x_min = .001
+        if css_actv = zero, gear_spd = speedrpm
+        else, gear_spd = (conversion * g_speed) / (pi * abs(x_min) * two)
+        gear = frange(one, gear_spd)
+        *gear
+        ]
+
+prpm            #Output for start spindle
+      speed = speedrpm
+      pbld, n, *sg97, pgear, *speed, *spindle_l, e
+
+prpmnull       #Output for RPM at NULL tlchg (don't force spindle 'M' code)
+      speed = speedrpm
+      if posttype = two, pbld, n, *sg97, pgear, *speed, spindle_l, e
+      else, pbld, n, *sg97, *speed, spindle_m, e
+
+pcssg50         #Output Constant surface speed clamp
+      #if css_actv, pbld, n, *sg50, *maxss, e
+
+pcss            #Output Constant surface speed
+      speed = g_speed
+      if css_actv, pbld, n, *sg9697, *sg50, *maxss, *speed, spindle_l, e
+      !speed
+
+#Toolchange setup, spindle output, pspindle must be called first
+pnullspindle  #Null toolchange and dwell spindle change, g_speed is input
+      if prv_css_actv<>css_actv | prv_g_spdir<>g_spdir
+         | prv_speed<>g_speed,
+        [
+        #Switch G97/G96 or direction at null or dwell
+        #Stop the spindle if direction changes
+        if prv_g_spdir <> g_spdir, pbld, n, pnullstop, e
+        if css_actv,
+          [
+          speed = g_speed
+          pnullg50
+          if prv_speed <> speed | prv_css_actv<>css_actv, pcss #(09/05/01)
+          ]
+        else,
+          [
+          if (prv_speed<>g_speed | prv_g_spdir<>g_spdir | prv_css_actv<>css_actv)
+             & g_speed, prpmnull #(09/05/01)
+          ]
+        ]
+      else, pnullg50
+
+pnullg50      #Change G50 clamp speed at null or dwell
+      if prv_maxss <> maxss & css_actv, pcssg50
+
+pnullstop     #Stop spindle at null, dwell or tool end
+      sav_spdir = g_spdir
+      if cool_w_spd = zero, g_spdir = one
+      else, g_spdir = one + (fsg2(coolant) * three)
+      if posttype = two, spindle_l
+      else, spindle_m
+      g_spdir = sav_spdir
+
+pspindle        #Spindle speed calculations for RPM
+      if maxss = zero | maxss > max_speed, maxss = max_speed
+      if css_actv,
+        [
+        #Spindle speed calculations for strt_spd w/CSS
+        speedx = abs(xa)
+        if opcode = 104, speedx = abs(c1_x_min)
+        if opcode = 105, speedx = abs(tcr)
+        if speedx < .001, speedx = .001
+        speedrpm = (conversion * g_speed) / (pi * speedx * two)
+        ]
+      else, speedrpm = g_speed
+      #zero indicates spindle off (not a mistake)
+      if speedrpm,
+        [
+        if speedrpm > maxss, speedrpm = maxss
+        if speedrpm < min_speed, speedrpm = min_speed
+        ]
+      #Spindle speed for RPM with lathe drill, thread
+      if opcode = 104 | opcode = 105, css_actv = zero
+      if css_actv = zero, g_speed = speedrpm
+
+pset_g_speed    #Set the spindle control variables from the read variables
+      g_speed = abs(ss)
+      if cool_w_spd, g_spdir = fsg3(spdir) + (fsg2(coolant) * 3)
+      else, g_spdir = fsg3(spdir)
+      if spd_rev, pswtchspin
+
+pswtchspin      #Reverse spindle direction
+      if g_spdir > two, g_spdir = abs (g_spdir - five) + three
+      else, g_spdir = abs (g_spdir - two)
+
+preadcur_nxt    #Read current and next tool record
+      c1_gcode = rbuf (one, rc1)     #Current tool record
+      #Place buffered variables in post global variables
+      cuttype = c1_cuttype
+      lathtype = c1_lathtype
+      lathecc = c1_lathecc
+      gcodecc = c1_gcodecc
+      y_axis = c1_y_axis
+	  millcc = c1_millcc
+      n1_gcode = rbuf (one, nc1)     #Next tool record
+      if cuttype = one, cc_1013 = one
+      else, cc_1013 = zero
+      if lathecc<>zero & lathecc<>4, compok = zero
+      else, compok = one
+
+ptlchg1002      #Call at actual toolchange with tlchng_aft
+      whatline = four #Required for vector toolpaths
+      pmatrix_su
+      pmap_plane
+      pset_turret
+      pset_g_speed
+      if gcode = 1000,
+        [
+        #Null toolchange
+        if millcc, cutpos2 = sav_cutpos2
+        ]
+      else,
+        [
+        #Toolchange and Start of file
+        if gcode = 1002,
+          [
+          #Actual toolchange
+          preset_mod
+          ]
+        prv_xia = vequ (c1_xh)
+        prv_feed = c9k
+        pnt_at_zero = zero
+        ]
+      #Mill canned cycle initialze at toolchange
+      arcoutput = sav_arcout
+      if millcc,
+        [
+        #R arc output
+        arcoutput = one
+        if cuttype = four,
+          [
+          crad = rotdia/two
+          ]
+        else,
+          [
+          breakarcs = zero
+          ]
+        ]
+      iout = zero
+      kout = zero
+
+preset_mod    #Reset the mode flags and map during motion blocks
+      breakarcs = breakarcss
+      cir_at_zero = zero
+      linarc = zero
+      brklinestype = zero
+
+# --------------------------------------------------------------------------
+# Motion NC output
+# --------------------------------------------------------------------------
+prapidout       #Output to NC, linear movement - rapid
+      pcan1, pbld, n, psgplane, pexct, psgcode, psccomp, pxout, pyout,
+        pzout, pcout, pscool, strcantext, e
+
+plinout         #Output to NC, linear movement - feed
+      pcan1, pbld, n, psgplane, sgfeed, pexct, psgcode, psccomp, pxout,
+        pyout, pzout, pcout, pfr, pscool, strcantext, e
+
+pcirout         #Output to NC, circular interpolation
+      pcan1, pbld, n, psgplane, sgfeed, pexct, psgcode, psccomp, pxout,
+        pyout, pzout, pcout, parc, pfr, pscool, strcantext, e
+
+pl_ncoutput     #Movement output
+      pcc_capture   #Capture LCC ends, stop output RLCC
+      pcom_moveb    #Get machine position, set inc. from last position
+      pcan
+      c_rcc_setup   #Save original in sav_xa and shift copy_x for LCC comp.
+      if gcode = zero, prapidout
+      if gcode = one, plinout
+      if gcode > one & gcode < four, pcirout
+      if lcc_cc_pos, plcc_cc_pos  #Use sav_xa to position with comp. LCC
+      pcom_movea    #Update previous, pcan2
+
+pm_ncoutput     #Movement output
+      pcom_moveb    #Get machine position, set inc. from last position
+      pcan
+      pindex
+      ppos_cax_lin  #Position C axis, toolplane or CL
+      if millcc, pmillccb #Set mill conversion
+      if gcode = zero, prapidout
+      if gcode = one, plinout
+      if gcode > one & gcode < four, pcirout
+      if millcc, pmillcca #End mill conversion
+      pcom_movea    #Update previous, pcan2
+      ppos_pnt_zero #Update to detect point at zero
+
+pdwl_spd        #Output to NC, spindle, dwell changes
+      pset_g_speed
+      pspindle
+      comment
+      pnullspindle
+      pcan
+      if fmtrnd(dwell), pdwell1
+      else, pcan1, pbld, n, strcantext, e
+      pcan2
+
+mrapid          #Output to NC of linear movement - rapid, mill
+      copy_x = vequ(x)
+      pm_ncoutput
+
+pzrapid         #Linear movement in Z axis only - rapid, mill
+      copy_x = vequ(x)
+      pm_ncoutput
+
+pz              #Linear movement in Z axis only - at feedrate, mill
+      copy_x = vequ(x)
+      pm_ncoutput
+
+mlin            #Output to NC of linear movement - feed, mill
+      copy_x = vequ(x)
+      pm_ncoutput
+
+mcir            #Output to NC of circular interpolation, mill
+      pshft_map_ijk
+      copy_x = vequ(x)
+      pm_ncoutput
+
+lrapid          #Rapid linear movement, lathe
+      copy_x = vequ(x)
+      pl_ncoutput
+
+llin            #Linear line movement - at feedrate, lathe
+      copy_x = vequ(x)
+      pl_ncoutput
+
+lcir            #Circular interpolation, lathe
+      pshft_map_ijk
+      copy_x = vequ(x)
+      pl_ncoutput
+
+pmx             #Output to NC of Multisurf Rotary, mill
+      copy_x = vequ(x)
+      pm_ncoutput
+
+#Pre-process rotary motion control flags, mill
+pmx0            #5 ax Drill
+      if cuttype = five,
+        [
+        if drill5 = one, z = initht * z_mult
+        else,
+          [
+          if fr = -2, gcode = zero
+          else, gcode = one
+          ]
+        ]
+plin0           #Pre-linear movement postblock
+      if posttype <> two,
+        [
+        preset_mod
+        if y_axis = zero & millcc = zero & c_axistype <> three,
+          [
+          #Set brklinestype
+          if abs(cuttype) = two, brklinestype = 6
+          if cuttype = three, brklinestype = four
+          ]
+        ]
+
+pcir0           #Pre-circular interpolation postblock
+      pmap_plane
+      if posttype <> two,
+        [
+        preset_mod
+        pshft_map_xc
+        if y_axis = zero & millcc = zero,
+          [
+          #Set linarc, breakarcs and cir_at_zero
+          if fmtrnd(xca) = zero & fmtrnd(yca) = zero,
+            [
+            #Set breakarcs and cir_at_zero
+            breakarcs = zero
+            #C axis move
+            if mach_plane = zero,
+              [
+              cir_at_zero = one
+              czero_csav = csav
+              ]
+            #Arc output
+            if mach_plane = two, cir_at_zero = m_one
+            ]
+          if cir_at_zero = zero, linarc = one
+          ]
+        ]
+      !ynci
+
+# --------------------------------------------------------------------------
+# Motion output components
+# --------------------------------------------------------------------------
+pdwell1         #Dwell output
+      gcode = four  #for implied dwells
+      pcan1, pbld, n, *sgcode, *dwell, strcantext, e
+
+pbld            #Canned text - block delete
+      if bld, '/'
+
+pfbld           #Force block delete
+      "/"
+
+psgplane        #Machining plane
+      if y_axis_mch, sgplane
+      !plane
+
+pfsgplane       #Force machining plane
+      if y_axis_mch, *sgplane
+      !plane
+
+pexct           #Canned text - exact stop
+      if exact, 'G9'
+
+psgcode         #Output the Gcode based on the current plane
+      if c_ax_flp,
+        [
+        #Reverse arc direction for c_axis flip
+        if gcode = two | gcode = three,
+          [
+          sav_gcode = gcode
+          gcode = abs (gcode - five)
+          ]
+        ]
+      if plane = zero, `sgcode
+      if plane = one, `sgcode1
+      if plane = two, `sgcode2
+      if c_ax_flp, gcode = sav_gcode
+
+psccomp         #Output the cutter compensation based on the current plane
+      if compok,
+        [
+        if plane = zero, sccomp
+        if plane = one, sccomp1
+        if plane = two, sccomp2
+        ]
+
+pfxout          #Force X axis output
+      if absinc = zero, *xabs, !xinc
+      else, *xinc, !xabs
+
+pxout           #X output
+      if absinc = zero, xabs, !xinc
+      else, xinc, !xabs
+
+pfyout          #Force Y axis output
+      if y_axis_mch,
+        [
+        if absinc = zero, *yabs
+        else, *yinc
+        ]
+      else, pchecky
+      !yabs, !yinc
+
+pyout           #Y output
+      if y_axis_mch,
+        [
+        if absinc = zero, yabs
+        else, yinc
+        ]
+      else, pchecky
+      !yabs, !yinc
+
+pchecky         #Y output should not happen on a c-axis lathe
+      if not(toolchng) & yinc, result = mprint(symoterror)
+
+pfzout          #Force Z axis output
+      if absinc = zero, *zabs, !zinc
+      else, *zinc, !zabs
+
+pzout           #Z output
+      if absinc = zero, zabs, !zinc
+      else, zinc, !zabs
+
+pfcout          #Force C axis output
+      if posttype <> two & c_axistype < three,
+        [
+        if c_axistype = one,
+          [
+          if absinc = zero, *cabs, !cinc
+          else, *cinc, !cabs
+          ]
+        else, #Signed direction, no incremental
+          [
+          if indx_mc = zero, result = nwadrs(sc_minus, cabs)
+          else, result = nwadrs(str_cax_abs, cabs)
+          *cabs
+          !c_wnd, !cabs, !cinc
+          ]
+        ]
+
+pcout           #C axis output
+      if posttype <> two & c_axistype < three,
+        [
+        if c_axistype = one,
+          [
+          if absinc = zero, cabs, !cinc
+          else, cinc, !cabs
+          ]
+        else, #Signed direction, modality on c_wnd, no incremental
+          [
+          if prv_c_wnd <> c_wnd,
+            [
+            if indx_mc = zero, result = nwadrs(sc_minus, cabs)
+            else, result = nwadrs(str_cax_abs, cabs)
+            *cabs
+            ]
+          !c_wnd, !cabs, !cinc
+          ]
+        ]
+
+pindex          #Index output
+      if c_axistype = three,
+        [
+        pbld, n, `sindx_mc, indx_out, e
+        !cabs, !cinc
+        ]
+
+parc            #Select the arc output
+      if arcoutput = zero,
+        [
+        #Arc output for IJK
+        if arctype = one,
+          [
+          #Arc output for IJK, absolute
+          iout = (iout + dia_shift) * dia_mult
+          jout = (jout + y_shift) * y_mult
+          kout = (kout + z_shift) * z_mult
+          if c_ax_flp, iout = -iout
+          ]
+        else,
+          [
+          #Arc output for IJK, start/center
+          iout = iout * dia_mult
+          jout = jout * y_mult
+          kout = kout * z_mult
+          if c_ax_flp, iout = -iout
+          ]
+        iout, kout, jout
+        ]
+      else,
+        [
+        #Arc output for R
+        if abs(sweep)<=180 | arcoutput=one, result = nwadrs(srad, arcrad)
+        else, result = nwadrs(srminus, arcrad)
+        *arcrad
+        ]
+
+pffr            #Output feedrate, force
+      if ipr_actv = zero, pfr_m
+      else, pfr_l
+      *feed
+
+pfr             #Output feedrate
+      if ipr_actv = zero, pfr_m
+      else, pfr_l
+      `feed
+
+pfr_m           #Format feedrate for mill
+      result = nwadrs(strf, feed)
+      result = newfs (17, feed)
+
+pfr_l           #Format feedrate for lathe
+      if opcode = 104,
+        [
+        #Format feedrate for lathe thread
+        result = nwadrs(stre, feed)
+        result = newfs (19, feed)
+        ]
+      else,
+        [
+        result = nwadrs(strf, feed)
+        result = newfs (18, feed)
+        ]
+
+pscool          #Coolant is seperate code
+      if cool_w_spd = zero, scoolant
+      !coolant
+
+pfscool         #Coolant is seperate code, force
+      if cool_w_spd = zero, *scoolant
+      !coolant
+
+pcc_capture     #Capture ends of canned turning path, stop output w/rough
+      #Stop output in rough only lathe canned cycles
+      #between rough and finish paths
+      if cc_stop_fcc & rcc_flg = 6, no_nc_out = one
+      #Capture vector for G73 cycle
+      if rpd_typ = 6 & abs(lathecc) = two,
+        [
+        if rcc_flg = one, lcc_xcst = vequ (copy_x)
+        if rcc_flg = three, lcc_xcend = vequ (copy_x)
+        ]
+
+pcom_moveb      #Common motion preparation routines, before
+      pshft_map_xa
+      pxyzcout
+      ps_inc_calc
+
+ppos_cax_lin    #Position C if from CL
+      if (prv_pnt_at_zero) & c_axistype < three,
+        [
+        #Output to NC, C axis movement only - rapid deg/min
+        sav_gcode = gcode
+        sav_feed = feed
+        gcode = one
+        if millcc = zero,
+          [
+          feed = maxfrdeg
+          pbld, n, psgcode, pfcout, pffr, e
+          ]
+        else, pbld, n, psgcode, pfcout, pfr, e
+        gcode = sav_gcode
+        feed = sav_feed
+        ]
+
+pcom_movea      #Common motion preparation routines, after
+      pcan2
+      pe_inc_calc
+
+ppos_pnt_zero   #Position C if from CL
+      !pnt_at_zero
+      pnt_at_zero = zero
+
+#Mill canned cycle output
+pmillccb        #Cross/Face canned cycle code, before
+      if c1_millcc = n1_millcc & n1_millcc & n1_gcode = 1000
+      & cutpos2 = three,
+        [
+        sav_cutpos2 = two
+        cutpos2 = two
+        ]
+      if cutpos2 = one,
+        [
+        result = newfs(two, cabs)
+        result = newfs(two, cinc)
+        #Cross/Face canned cycle start code
+        if abs(cuttype) = two,
+          [
+          #Face canned cycle start code, G112 (break ramp)
+          pbld, n, *sgfeed, *sgcode, *sg112, e
+          prv_xabs = c9k
+          prv_xinc = c9k
+          prv_cabs = c9k
+          prv_cinc = c9k
+          compok = one
+          ]
+        else,
+          [
+          #Cross canned cycle start code, G107
+          pbld, n, *sgcode, *sgfeed, *sg107, *crad, e
+          ]
+        ]
+      if cutpos2 > zero & cutpos2 < four,
+        [
+        #Change rapid to highest possible feedrate
+        if gcode = zero,
+          [
+          gcode = one
+          feed = maxfeedpm
+          ]
+        ]
+
+pmillcca        #Cross/Face canned cycle code, after
+      if cutpos2 = three,
+        [
+        #Cross/Face canned cycle end code
+        if abs(cuttype) = two, pbld, n, *sg113, e  #Face
+        else, pbld, n, *sg108, "C0.", e #Cross
+        result = newfs(11, cabs)
+        result = newfs(14, cinc)
+        ]
+
+# --------------------------------------------------------------------------
+# Drilling
+# --------------------------------------------------------------------------
+pdrill0         #Pre-drill postblock call
+      if cuttype = five, #Don't allow 5 axis, rests at toolchange
+        [
+        usecandrill = zero
+        usecanpeck = zero
+        usecanchip = zero
+        usecantap = one
+        usecanbore1 = zero
+        usecanbore2 = zero
+        usecanmisc1 = zero
+        usecanmisc2 = zero
+        ]
+      else,
+        [
+        if abs(cuttype) < three, mdrl_dir = zero
+        else, mdrl_dir = one
+        x = xnci
+        y = ynci
+        z = refht
+        copy_x = vequ(x)
+        pshft_map_xa
+        pxyzcout
+        refht_x = vequ(xabs)
+        z = depth
+        copy_x = vequ(x)
+        pshft_map_xa
+        pxyzcout
+        depth_x = vequ(xabs)
+        z = zdrl
+        copy_x = vequ(x)
+        pshft_map_xa
+        pxyzcout
+        zdrl_x = vequ(xabs)
+        z = initht  #Initial is last
+        copy_x = vequ(x)
+        pshft_map_xa
+        pxyzcout
+        initht_x = vequ(xabs)
+        znci = initht
+        ps_inc_calc
+        ]
+
+pdrlcommonb     #Canned Drill Cycle common call, before
+      if gcode = 81,
+        [
+        if drillcyc = three, drlgsel = fsg1 (-g_speed) + drillcyc * two #Tap
+        else, drlgsel = fsg2 (dwell) + drillcyc * two
+        if initht <> refht, drillref = zero
+        else, drillref = one
+        prv_refht_a = c9k
+        prv_refht_i = c9k
+        prv_dwell = zero
+        ]
+      if mdrl_dir = zero, #Set Z to depth
+        [
+        zia = fmtrnd(depth_z)
+        zinc = zia - prv_zia
+        ]
+      else,               #Set X to depth
+        [
+        xia = fmtrnd(depth_x)
+        xinc = xia - prv_xia
+        ]
+      xabs = vequ (depth_x)
+      comment
+      pcan
+
+pgdrlout        #Drill Gcode output
+      if mdrl_dir = zero, *sgdrillf
+      else, *sgdrillc
+
+prdrlout        #R drill position
+      if mdrl_dir = zero, refht_a = refht_z
+      else, refht_a = refht_x
+      refht_i = refht - initht
+      if absinc = zero, refht_a, !refht_i
+      else, refht_i, !refht_a
+
+ldrill          #Canned drill cycle, lathe
+      #Use this postblock to customize lathe drilling cycles 0 - 7
+      pdrlcommonb
+      "CUSTOMIZABLE DRILL CYCLE ", pfxout, pfyout, pfzout, e
+      pcom_movea
+
+lpeck           #Canned peck drill cycle, lathe
+      ldrill
+
+lchpbrk         #Canned chip break cycle, lathe
+      gcode = zero
+      prv_dwell = zero
+      @dwell
+      comment
+      pcan
+      pe_inc_calc
+      xabs = vequ(refht_x)
+      ps_inc_calc
+      pcan1, pbld, n, sgcode, pzout, strcantext
+      pe_inc_calc
+      xabs = vequ(depth_x)
+      ps_inc_calc
+      if old_new_sw = one,
+        [
+        pbld, n, *sg74, *peckclr, e
+        result = nwadrs (strq, peck1)
+        ]
+      else, result = nwadrs (strk, peck1)
+      pcan1, pbld, n, *sg74, pfzout, *peck1, pffr, strcantext, e
+      prv_gcode = -1
+      if refht <> initht,
+        [
+        gcode = zero
+        xabs = vequ(refht_x)
+        ps_inc_calc
+        pe_inc_calc
+        xabs = vequ(initht_x)
+        ps_inc_calc
+        pbld, n, sgcode, pfzout, e
+        ]
+      pcom_movea
+
+ltap            #Canned tap cycle, lathe
+      gcode = zero
+      prv_dwell = zero
+      @dwell
+      comment
+      pcan
+      pe_inc_calc
+      xabs = vequ(refht_x)
+      ps_inc_calc
+      pcan1, pbld, n, sgcode, pzout, strcantext, e
+      pe_inc_calc
+      xabs = vequ(depth_x)
+      ps_inc_calc
+      opcode = 104 #thread address from feedrate
+      pbld, n, *sthdg33_1, pfzout, pffr, e
+      if dwell, pdwell1
+      pe_inc_calc
+      xabs = vequ(refht_x)
+      ps_inc_calc
+      pswtchspin
+     # pbld, n, *sthdg33_1, pfzout, *spindle_l, e
+      if dwell, pdwell1
+      prv_gcode = -1
+     # pbld, n, pnullstop
+      pswtchspin
+      if refht <> initht,
+        [
+        gcode = zero
+        pe_inc_calc
+        xabs = vequ(initht_x)
+        ps_inc_calc
+        #pbld, n, sgcode, pfzout, *spindle_l, e
+        ]
+      pbld, n, spindle_l, e
+      opcode = 81 #Restore opcode
+      pcom_movea
+
+lbore1          #Canned bore #1 cycle, lathe
+      ldrill
+
+lbore2          #Canned bore #2 cycle, lathe
+      ldrill
+
+lmisc1          #Canned misc #1 cycle, lathe
+      ldrill
+
+lmisc2          #Canned misc #2 cycle, lathe
+      ldrill
+
+mdrill          #Canned drill cycle, mill
+      pdrlcommonb
+      pcan1, pbld, n, *sgdrlref, pgdrlout, pxout, pyout, pzout,
+        pcout, prdrlout, dwell, pffr, strcantext, e
+      pcom_movea
+
+mpeck         #Canned peck drill cycle, mill
+      pdrlcommonb
+      pcan1, pbld, n, *sgdrlref, pgdrlout, pxout, pyout, pzout,
+        pcout, prdrlout, *peck1, dwell, pffr, strcantext, e
+      pcom_movea
+
+mchpbrk       #Canned chip break cycle, mill
+      mpeck
+
+mtap          #Canned tap cycle, mill
+      pdrlcommonb
+      pcan1, pbld, n, *sgdrlref, pgdrlout, pxout, pyout, pzout,
+        pcout, prdrlout, pffr, strcantext, e
+      pcom_movea
+
+mbore1        #Canned bore #1 cycle, mill
+      mdrill
+
+mbore2        #Canned bore #2 cycle, mill
+      mdrill
+
+mmisc1        #Canned misc #1 cycle, mill
+      pdrlcommonb
+      pcan1, pbld, n, *sgdrlref, pgdrlout, pxout, pyout, pzout,
+        pcout, prdrlout, *shftdrl, dwell, pffr, strcantext, e
+      pcom_movea
+
+mmisc2        #Canned misc #2 cycle, mill
+
+mdrill_2      #Canned drill cycle repeat, mill
+      pdrlcommonb
+      pcan1, pbld, n, pxout, pyout, pzout, pcout, prdrlout,
+      dwell, pfr, strcantext, e
+      pcom_movea
+
+mpeck_2       #Canned peck drill cycle repeat, mill
+      mdrill_2
+
+mchpbrk_2     #Canned chip break cycle repeat, mill
+      mdrill_2
+
+mtap_2        #Canned tap cycle repeat, mill
+      mdrill_2
+
+mbore1_2      #Canned bore #1 cycle repeat, mill
+      mdrill_2
+
+mbore2_2      #Canned bore #2 cycle repeat, mill
+      mdrill_2
+
+mmisc1_2      #Canned misc #1 cycle repeat, mill
+      mdrill_2
+
+mmisc2_2      #Canned misc #2 cycle repeat, mill
+      mdrill_2
+
+pdrlcst         #Custom drill cycles 8 - 19 (user option)
+      #Use this postblock to customize drilling cycles 8 - 19
+      pdrlcommonb
+      "CUSTOMIZABLE DRILL CYCLE ", pfxout, pfyout, pfzout, pfcout, e
+      pcom_movea
+
+pdrlcst_2       #Custom drill cycles 8 - 19 (user option)
+      #Use this postblock to customize drilling cycles 8 - 19
+      pdrlcommonb
+      "CUSTOMIZABLE DRILL CYCLE ", pfxout, pfyout, pfzout, pfcout, e
+      pcom_movea
+
+pcanceldc     #Cancel drill cycle
+      xabs = vequ (initht_x) #Position to return
+      ps_inc_calc
+      pe_inc_calc #Update to current location
+      gcode = zero
+      pcan
+      pcan1, pbld, n, sgcode, "G80", strcantext, e
+      pcan2
+
+# --------------------------------------------------------------------------
+# Version 9+ MiscOps Section
+# --------------------------------------------------------------------------
+#Miscellaneous Variables Common to all Miscops operations
+#Format as needed
+
+#Integers
+#miscops_mi1, miscops_mi2, miscops_mi3,
+#miscops_mi4,  miscops_mi5, miscops_mi6,
+#miscops_mi7, miscops_mi8, miscops_mi9,
+#miscops_mi10
+
+#Reals
+#miscops_mr1, miscops_mr2, miscops_mr3,
+#miscops_mr4, miscops_mr5, miscops_mr6,
+#miscops_mr7, miscops_mr8, miscops_mr9,
+#miscops_mr10
+#
+# --------------------------------------------------------------------------
+#Format Assignments and Initializations
+# --------------------------------------------------------------------------
+fmt Z 2 stck_init_z             #Initial Z position of the stock (900-902,904,905)
+fmt Z 2 stck_final_z            #Final Z position of the stock (900-902,904,905)
+fmt Z 2 stck_chuk_st_z          #Initial Z axis Chuck Position (900-903)
+fmt X 2 stck_chuk_st_x          #Initial X axis Chuck Position (900-903)
+fmt Z 2 stck_chuk_end_z         #Final Z axis Chuck Position (900-903)
+fmt X 2 stck_chuk_end_x         #Final X axis Chuck Position (900-903)
+fmt W 3 stck_chuk_st_dz         #Destination chuck Z axis reference position before transfer (900)
+fmt U 3 stck_chuk_st_dx         #Destination chuck X axis reference position before transfer (900)
+fmt W 3 stck_chuk_end_dz        #Destination chuck Z axis reference position after transfer (900)
+fmt U 3 stck_chuk_end_dx        #Destination chuck X axis reference position after transfer (900)
+fmt Z 2 stck_clear              #Stock clearance value for stock pull operation (902)
+fmt X 2 stck_tool_x             #Tool X axis position for bar stop / puller (902)
+fmt Z 2 stck_grip               #Grip length value for stock pull operation(902)
+
+fmt F 18 stk_adv_fr             #Used with Lathe Stock Advance (Bar-Feed/Pull) function (NCI 902).
+fmt F 18 stck_appr_fr           #Used with Lathe Stock Advance (Bar-Feed/Pull) function (NCI 902)
+
+#Flags
+stck_op         : 0             #Stock advance operation method (902)
+                                #(0=Push stock,1=Push stock with Use Tool Stop option,2=Pull stock)
+stck_spindle    : 0             #Active spindle with stock to transfer (900-902)
+                                #0=Left Spindle,1=Right Spindle
+clmp_op         : 0             #The selected Operation mode: 0=Clamp,1=Un-clamp,2=Re-position (903)
+clmp_spindle    : 0             #Active spindle for clamp/unclamp 0=Left Spindle,1=Right Spindle (903)
+tlstck_on       : 0             #Retract or engage the tailstock (0=Retract,1=Engage) (904)
+
+# --------------------------------------------------------------------------
+#Postblock Section -comments only!
+# --------------------------------------------------------------------------
+pstck_trans     #NCI code = 900 available variables:
+                #stck_spindle, stck_init_z, stck_final_z,
+                #stck_chuk_st_z, stck_chuk_st_x,
+                #stck_chuk_end_z, stck_chuk_end_x,
+                #stck_chuk_st_dz, stck_chuk_st_dx,
+                #stck_chuk_end_dz, stck_chuk_end_dx
+                if stck_spindle = 0, "(Xfer Part from Left Spindle)", e
+                if stck_spindle = 1, "(Xfer Part from Right Spindle)", e
+
+pstck_flip      #NCI code = 901 available variables:
+                #stck_spindle, stck_init_z, stck_final_z,
+                #stck_chuk_st_z, stck_chuk_st_x,
+                #stck_chuk_end_z, stck_chuk_end_x
+                "(Flip Stock)", e
+
+
+pstck_bar_fd	#NCI code = 902 available variables:
+                #stck_spindle, stck_op, stck_clear,
+                #stck_grip, stck_init_z, stck_final_z,
+                #stck_chuk_st_z, stck_chuk_st_x,
+                #stck_chuk_end_z, stck_chuk_end_x
+                [
+                  if stck_op = 0, "(Push stock -"
+                  if stck_op = 1, "(Push stock with Use Tool Stop option -"
+                  if stck_op = 2, "(Pull stock -"
+                  if stck_spindle = 0, "from Left Spindle)", e
+                  if stck_spindle = 1, "from Right Spindle)", e
+                ]
+
+pchuck	        #NCI code = 903 available variables:
+                #clmp_spindle, clmp_op,  stck_chuk_st_z,
+                #stck_chuk_st_x, stck_chuk_end_z, stck_chuk_end_x
+                [
+                  if clmp_op = 0, "(Clamp -"
+                  if clmp_op = 1, "(Un-clamp -"
+                  if clmp_op = 2, "(Re-position -"
+                  if clmp_spindle = 0, "Left Spindle)", e
+                  if clmp_spindle = 1, "Right Spindle)", e
+                ]
+
+ptailstock	    #NCI code = 904 available variables:
+                #tlstck_on, stck_init_z, stck_final_z
+                if tlstck_on = 0, "(Retract Tailstock)", e
+                if tlstck_on = 1, "(Engage Tailstock)", e
+
+psteadyrest	    #NCI code = 905 available variables:
+                #stck_init_z, stck_final_z
+                "(Position Steadyrest)", e
+
+# --------------------------------------------------------------------------
+# Threading output
+# --------------------------------------------------------------------------
+pthread0        #Pre-thread calculations
+      # Calculate taper delta 'X' on Acceleration Clearance distance
+      thdrdlt = (((thdx2 - thdx3) / (thdz1 - thdz2)) * thdzclr)
+      # Add to the original thread 'X' difference calculation
+      thdrdlt = (thdrdlt + (thdx2 - thdx3)) * pl_ax_m0x
+      thdang = rad2deg * thdangle
+      thd_dirx = (thdx2 - thdx3) * pl_ax_m0x
+      thd_dirz = (thdz1 - thdz2) * pl_ax_m0z
+      thd_vlen = thdlead/ nstarts
+      thd_dirx = vsa (thd_vlen, thd_dirx)
+      if fr_pos, pthreadpull
+      else, thdpull = zero
+
+pthreadpull     #Pre-thread calculations
+      if thdpulloff/(fr_pos*10) > .99, thdpull = 99
+      else, thdpull = (thdpulloff/(fr_pos*10))*100
+
+pthdext         #Calculation override for external thread
+      #thddepth = thdlead * .61343         #Calc. thread depth
+      #thdflat  = thdlead * .1667          #Calc. thread flat
+
+pthdint         #Calculation override for internal thread
+      #thddepth = thdlead * .54127         #Calc. thread depth
+      #thdflat  = thdlead * .125           #Calc. thread flat
+
+pthdface        #Calculation override for face thread
+      #thddepth = thdlead * .61343         #Calc. thread depth
+      #thdflat  = thdlead * .1667          #Calc. thread flat
+
+pthrg32_1       #G33 threading first
+      comment
+      gcode = zero
+      lrapid
+
+pthrg32_2       #G33 threading second
+      gcode = zero
+      lrapid
+
+pthrg32_3       #G33 threading third
+      copy_x = vequ(x)
+      pcom_moveb
+      pcan1, pbld, n, sgfeed, *sthdgcode, pxout, pyout, pzout, pcout, pffr,
+      strcantext, e
+      pcom_movea
+      prv_gcode = m_one
+
+pthrg32_4       #G33 threading fourth
+      gcode = zero
+      lrapid
+
+pthrg92_1       #G92 threading
+      if thdpass = one, pthrg92_11
+
+pthrg92_11      #G92 threading
+      comment
+      gcode = zero
+      lrapid
+      prv_feed = m_one
+      prv_zabs = c9k
+      prv_thdtype = m_one
+
+pthrg92_2       #G92 threading
+
+pthrg92_3       #G92 threading
+      copy_x = vequ (x)
+      pcom_moveb
+      pcan1, pbld, n, sgfeed, sthdgcode, pxout, pyout, pzout, pcout,
+        [if thdrdlt & thdpass = one, *thdrdlt], pfr, strcantext, e
+      pcom_movea
+      prv_gcode = m_one
+
+pthrg92_4       #G92 threading
+
+pg32e           #G33/G92 threading end
+      gcode = zero
+      lrapid
+
+pthrg76_1       #G76 threading start point
+      gcode = zero
+      lrapid
+
+pg76            #G76 threading
+      comment
+      gcode = zero
+      lrapid
+      sav_xa = vequ(copy_x)
+      if thdface = zero, copy_x = thdx2
+      else, copy_z = thdx2
+      if thdface = zero, copy_z = thdz2
+      else, copy_x = thdz2
+      pcom_moveb
+      nstart_cnt = zero
+      while nstart_cnt < nstarts, pg76nstart
+      pcom_movea
+      prv_gcode = -1
+      copy_x = vequ(sav_xa)
+      copy_x = copy_x + (thd_dirx * (nstarts - one))
+      copy_z = copy_z + (thd_dirz * (nstarts - one))
+      pcom_moveb
+      pe_inc_calc
+      !gcode, !xabs, !yabs, !zabs, !xinc, !yinc, !zinc
+
+pg76nstart      #G76 threading, for multiple starts
+      if old_new_sw = zero, pg76old
+      else, pg76new
+      nstart_cnt = nstart_cnt + one
+      if nstarts <> one & nstart_cnt <> nstarts,
+      pbld, n, *sgcode, thd_dirx, thd_dirz, e
+
+pg76old         #G76 threading old style
+      pbld, n, *sthdgcode, pfxout, pfzout, *thdrdlt, *thddepth,
+        *thdfirst, *thdang, pffr, e
+
+pg76new         #G76 threading new style
+      pbld, n, *sthdgcode, *nspring, *thdpull, *thdang, *thdlast,
+        *thdfinish, e
+      pbld, n, *sthdgcode, pfxout, pfzout, *thddepth, *thdfirst,
+        *thdrdlt, pffr, e
+
+# --------------------------------------------------------------------------
+# Lathe canned cycle output
+# --------------------------------------------------------------------------
+pg71old         #Output G71-G72 canned cycle routines, old style
+      pbld, n, *scclgcode, *ng70s, *ng70e, *xstckcc, *zstckcc,
+        *depthcc, pffr, e
+
+pg71new         #Output G71-G72 canned cycle routines, new style, first
+      if gcodecc = 1, result = nwadrs (stru, depthcc)
+      else, result = nwadrs (strw, depthcc)
+      pbld, n, *scclgcode, *depthcc, *clearcc, e
+      pbld, n, *scclgcode, *ng70s, *ng70e, *xstckcc, *zstckcc, pffr, e
+
+pg73old         #Output G73 canned cycle routines, old style
+      pbld, n, *scclgcode, *ng70s, *ng70e, *g73x, *g73z,
+        *xstckcc, *zstckcc, *ncutscc, pffr, e
+
+pg73new       #Output G73 canned cycle routines, new style, first
+      pbld, n, *scclgcode, *g73x, *g73z, *ncutscc, e
+      pbld, n, *scclgcode, *ng70s, *ng70e, *xstckcc, *zstckcc, pffr, e
+
+pg74old         #Output G74-G75 canned cycle routines, old style
+      pbld, n, *scclgcode, pfxout, pfzout, *grvspcc, *grvdpcc,
+        *clearcc, pffr, e
+
+pg74new         #Output G74-G75 canned cycle routines, new style, first
+      pbld, n, *scclgcode, *clearcc, e
+      pbld, n, *sgfeed, *scclgcode, pfxout, pfzout, *grvspcc,
+        *grvdpcc, pffr, e
+
+prcc_setup      #Lathe canned cycle setup
+                #Capture values from rough
+      sav_iprcc = c1_ipr_actv
+      sav_feedcc = c1_fr_pos
+      if orient = one|orient = two|orient = five|orient = 6, lccdirx = one
+      else, lccdirx = m_one
+      if orient = one|orient = four|orient = five|orient = 8, lccdirz = one
+      else, lccdirz = m_one
+      if lathecc > zero, cc_stop_fcc = one
+      else, cc_stop_fcc = zero
+      #G74/G75
+      if lathecc = three,
+        [
+        lcc_xcst = vequ (copy_x)
+        if dopeckcc = zero,
+          [
+          depthcc = zero
+          clearcc = zero
+          ]
+        if directcc > one,
+          [
+          gcodecc = four
+          grvspcc = stepcc
+          grvdpcc = depthcc
+          ]
+        else,
+          [
+          gcodecc = five
+          grvspcc = depthcc
+          grvdpcc = stepcc
+          ]
+        ]
+      else,
+        [
+        if n1_cc_pos,
+          [
+          sav_xa = vequ(copy_x)
+          #Shift for cutter comp. start position
+          copy_x = copy_x + (lcc_move * lccdirx)
+          copy_z = copy_z + (lcc_move * lccdirz)
+          pcom_moveb
+          compok = zero
+          lcc_cc_pos = one
+          ]
+        else, lcc_cc_pos = zero
+        ]
+
+prcc_call_st    #Rough canned cycle start
+      if tool_op <> 208,
+        [
+        sav_subout = subout
+        sav_omitsq = omitseq
+        omitseq = one
+        extprg = one
+        subout = three
+        prv_gcode = m_one #Added (06/25/01)
+        ]
+
+prcc_call_end   #Rough canned cycle end
+      if tool_op <> 208,
+        [
+        omitseq = sav_omitsq
+        #Close the ext file
+        result = fclose (sbufname3)
+        #Open the ext file as a buffer
+        #Use the size to determine the start and end sequence
+        subout = sav_subout
+        size3 = rbuf(three, zero)
+        if omitseq = one,
+          [
+          ng70s = n
+          ng70e = n + seqinc
+          ]
+        else,
+          [
+          if old_new_sw = zero, ng70s = n + seqinc
+          else, ng70s = n + (seqinc * two)
+          ng70e = ng70s + (seqinc * (size3 - one))
+          ]
+        pwrite_g70
+        ]
+      #Setup the stock and clearance directions
+      g73x = vsub (lcc_xcst,lcc_xcend)
+      if old_new_sw = zero, g73x = g73x * pl_ax_m0x
+      else, g73x = g73x * dia_mult
+      g73z = g73z * pl_ax_m0z
+      xstckcc =  xstckcc * dia_mult * lccdirx
+      zstckcc =  zstckcc * lccdirz * pl_ax_m0z
+      clearcc =  clearcc * lccdirz * pl_ax_m0z
+      #Write the cycle definition
+      sav_feed = feed
+      sav_ipr = ipr_actv
+      feed = sav_feedcc
+      ipr_actv = sav_iprcc
+      if lathecc = three,
+        [
+        #Setup the previous position for inc. in G74/G75 cycle
+        sav_xa = vequ(xabs) #Save the cycle end
+        copy_x = vequ(lcc_xcst) #The cycle start raw
+        pshft_map_xa
+        pxyzcout  ##The cycle start in machine terms
+        ps_inc_calc #Recalculate incremental
+        pe_inc_calc #Update previous at start
+        xabs = vequ(sav_xa) #Restore the cycle end
+        ps_inc_calc #Recalculate incremental
+        ]
+      if old_new_sw = zero,
+        [
+        if gcodecc < three, pg71old
+        if gcodecc = three, pg73old
+        if gcodecc > three, pg74old
+        ]
+      else,
+        [
+        if gcodecc < three, pg71new
+        if gcodecc = three, pg73new
+        if gcodecc > three, pg74new
+        ]
+      if lathecc = three,
+        [
+        #Set the cycle end position at the original start
+        copy_x = vequ(lcc_xcst) #The cycle start raw
+        pshft_map_xa
+        pxyzcout  ##The cycle start in machine terms
+        ps_inc_calc #Position at start
+        pe_inc_calc #Update previous
+        ps_inc_calc #Recalculate incremental
+        ]
+      feed = sav_feed
+      ipr_actv = sav_ipr
+      if tool_op <> 208,
+        [
+        #Bug2 is off to prevent execution crashes with long strings
+        bug2 = zero
+        #Write the cycle profile, sequence are written now
+        rc3 = one
+        while rc3 <= size3,
+          [
+          #Write the lathe canned cycle profile
+          string3 = rbuf (three, rc3)
+          if rc3 = two,
+            [
+            #Add the finish spindle speed to the first move
+            speed = n1_ss
+            pbld, *n, *string3, *speed, e
+            ]
+          else,
+            [
+            if omitseq = one & rc3 = size3 + one, pbld, *n, *string3, e
+            else, pbld, n, *string3, e
+            ]
+          ]
+        #Close the buffer
+        result = fclose (three)
+        #Remove the ext file
+        result = remove (sbufname3)
+        bug2 = sav_bug2
+        ]
+
+pfcc_call       #G70 recall output postblock
+      if cc_stop_fcc = zero,
+        [
+        pread_g70
+        if foundcc = zero, result = mprint(sfccerror)
+        ]
+      no_nc_out = zero
+      cc_stop_fcc = zero
+
+pread_g70       #Read G70 recall buffer
+      foundcc = zero
+      size2 = rbuf (two, zero)
+      wc2 = one
+      while wc2 <= size2 & foundcc = zero,
+        [
+        fcc_subid = rbuf (two, wc2)
+        if fcc_subid = sub_op_id,
+          [
+          gcodecc = zero
+          ng70s = fcc_ng70s
+          ng70e = fcc_ng70e
+          pbld, n, *scclgcode, *ng70s, *ng70e, e
+          foundcc = one
+          ]
+        ]
+
+pwrite_g70      #Write G70 recall buffer
+      fcc_subid = sub_op_id
+      fcc_ng70s = ng70s
+      fcc_ng70e = ng70e
+      fcc_subid = wbuf (two, rc2)
+
+# --------------------------------------------------------------------------
+#Subprogram output
+#sub_trnstyp - 0=mirror, 1=rotate, 2=scale, 3=translate
+#sub_trnmthd (mirror) - 0=X axis, 1=Y axis, 2=line
+#sub_trnmthd (rotate) - 0=tplane, 1=tplane origin only, 2=coordinates
+# --------------------------------------------------------------------------
+pmiscint        #Capture the top level absinc for subprograms
+      if sub_level <= zero, absinc = mi2
+      ref_ret = mi3
+
+psub_call_m     #Call to main level, single tool
+      psub_call_trans
+
+psub_call_mm    #Call to main level, multiple tools
+      psub_call_trans
+
+psub_call_trans #Translate level calls from toolchange, user
+      #Mirror and coordinate rotate subs not allowed with lathe
+      if sub_trnstyp <> three & posttype = two, result = mprint(slthrmerror)
+      if (sub_trnstyp = one & sub_trnmthd = two)
+      | sub_trnstyp = zero, result = mprint(smilrmerror)
+      sav_absinc = absinc
+      pindex
+      if home_type > one,
+        [
+        if sub_mny_t,
+          [
+          absinc = zero
+          pbld, n, *sgcode, pwcs, pfxout, pfyout, pfzout, pfcout, e
+          pe_inc_calc
+          ps_inc_calc
+          ]
+        ]
+      else,
+        [
+        if home_type = one, result = mprint(shomeserror)
+        else,
+          [
+          if sub_mny_t, result = mprint(smny50error)
+          ]
+        #Apply G50 shift and correct incremental position
+        if sub_sec_no & sub_trnstyp = three,
+          [
+          sub_trnsx = vmap(sub_trnsx, hmtx1)
+          sub_trnsx = vscl(m_one, sub_trnsx)
+          sub_trnsx = sub_trnsx * dia_mult
+          sub_trnsy = sub_trnsy * y_mult
+          sub_trnsz = sub_trnsz * z_mult
+          pbld, n, *sg50, *sub_trnsx, [if y_axis_mch, *sub_trnsy],
+            *sub_trnsz, e
+          prv_xia = vadd(prv_xia, sub_trnsx)
+          ps_inc_calc
+          ]
+        if toolchng = zero | home_type < two,
+          [
+          pbld, n, *sgcode, pfxout, pfyout, pfzout, pfcout, e
+          pe_inc_calc
+          ps_inc_calc
+          ]
+        ]
+      absinc = sav_absinc
+      result = nwadrs(strp, main_prg_no)
+      pbld, n, "M98", *main_prg_no, e
+      prv_feed = c9k #Force feed in sub
+
+psub_st_m       #Header in main level
+      result = nwadrs(stro, main_prg_no)
+      " ", e
+      *main_prg_no, e
+
+psub_end_m      #End in main level
+      n, "M99", e
+
+psub_call_s     #Call to sub level
+      if tool_op = 201,  pread_g70
+      else, foundcc = zero
+
+      if foundcc = zero,
+        [
+        if sub_trnstyp <> 3, sub_level = -1
+        else,
+          [
+          result = nwadrs(strp, sub_prg_no)
+          sub_prg_no = sub_prg_no + 1000 #Add sub number offset
+          pbld, n, "M98", *sub_prg_no, e
+          ]
+        ]
+
+psub_st_s       #Header in sub leveln
+      result = nwadrs(stro, sub_prg_no)
+      " ", e
+      *sub_prg_no, e
+
+psub_end_s      #End in sub level
+      n, "M99", e
+
+# --------------------------------------------------------------------------
+# Canned Text
+# --------------------------------------------------------------------------
+pcan          #Canned text - before output call
+      strcantext = sblank
+      if cant_no > zero,
+        [
+        if cant_pos1 = zero, pcant_1
+        if cant_pos2 = zero, pcant_2
+        if cant_pos3 = zero, pcant_3
+        if cant_pos4 = zero, pcant_4
+        if cant_pos5 = zero, pcant_5
+        if cant_pos6 = zero, pcant_6
+        if cant_pos7 = zero, pcant_7
+        if cant_pos8 = zero, pcant_8
+        if cant_pos9 = zero, pcant_9
+        if cant_pos10 = zero, pcant_10
+        pbld, n, strcantext, e
+        strcantext = sblank
+        ]
+
+pcan1         #Canned text - with move
+      strcantext = sblank
+      if cant_no > zero,
+        [
+        if cant_pos1 = one, pcant_1
+        if cant_pos2 = one, pcant_2
+        if cant_pos3 = one, pcant_3
+        if cant_pos4 = one, pcant_4
+        if cant_pos5 = one, pcant_5
+        if cant_pos6 = one, pcant_6
+        if cant_pos7 = one, pcant_7
+        if cant_pos8 = one, pcant_8
+        if cant_pos9 = one, pcant_9
+        if cant_pos10 = one, pcant_10
+        ]
+      if cstop, strcantext = strcantext + sm00
+      if cgstop, strcantext = strcantext + sm01
+      #Output of strcantext occurs at the end of the output line
+
+pcan2         #Canned text - after output call
+      strcantext = sblank
+      if cant_no > zero,
+        [
+        if cant_pos1 = two, pcant_1
+        if cant_pos2 = two, pcant_2
+        if cant_pos3 = two, pcant_3
+        if cant_pos4 = two, pcant_4
+        if cant_pos5 = two, pcant_5
+        if cant_pos6 = two, pcant_6
+        if cant_pos7 = two, pcant_7
+        if cant_pos8 = two, pcant_8
+        if cant_pos9 = two, pcant_9
+        if cant_pos10 = two, pcant_10, e
+        pbld, n, strcantext, e
+        strcantext = sblank
+        ]

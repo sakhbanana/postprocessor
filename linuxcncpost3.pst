@@ -1,0 +1,1032 @@
+
+pcant_1       #Canned text - output call
+      cantext = cant_val1
+      pcant_out
+
+pcant_2       #Canned text - output call
+      cantext = cant_val2
+      pcant_out
+
+pcant_3       #Canned text - output call
+      cantext = cant_val3
+      pcant_out
+
+pcant_4       #Canned text - output call
+      cantext = cant_val4
+      pcant_out
+
+pcant_5       #Canned text - output call
+      cantext = cant_val5
+      pcant_out
+
+pcant_6       #Canned text - output call
+      cantext = cant_val6
+      pcant_out
+
+pcant_7       #Canned text - output call
+      cantext = cant_val7
+      pcant_out
+
+pcant_8       #Canned text - output call
+      cantext = cant_val8
+      pcant_out
+
+pcant_9       #Canned text - output call
+      cantext = cant_val9
+      pcant_out
+
+pcant_10      #Canned text - output call
+      cantext = cant_val10
+      pcant_out
+
+pcant_out     #Canned text - final output call
+      #Assign string select global variables
+      if cantext = 3, bld = one
+      if cantext = 4, bld = zero
+      if cantext = 9, exact = one
+      if cantext = 10, exact = zero
+      #Build the cantext string from strings
+      if cantext = 1, strcantext = strcantext + sm00
+      if cantext = 2, strcantext = strcantext + sm01
+      #Build the cantext string from string selects
+      if cantext = 5 | cantext = 6,
+        [
+        if cantext = 5, tlstk = zero
+        else, tlstk = one
+        rslt_upd = updstr (stlstk)
+        strcantext = strcantext + stlstk
+        ]
+      if cantext = 7 | cantext = 8,
+        [
+        if cantext = 7, chute = zero
+        else, chute = one
+        rslt_upd = updstr (schute)
+        strcantext = strcantext + schute
+        ]
+      #Build the cantext string from cantext number
+      if cantext > 10,
+        [
+        strtextno = no2str(cantext)
+        strcantext = strcantext + strm + strtextno
+        ]
+
+# --------------------------------------------------------------------------
+# Position calculations, generally these do not need to be modified
+# --------------------------------------------------------------------------
+#The variables for absolute output are xabs, yabs, zabs.
+#The variables for incremental output are xinc, yinc, zinc.
+#They are found from the input variables x, y, z (typically) which are
+#copied to copy_x, copy_y, copy_z.  These are passed to the mapping routine
+#to get raw machine coordinates xa, ya, za.  These are used in pxyxcout to
+#get the output xabs, yabs, zabs.  ps_inc_calc is called to get xinc, yinc,
+#zinc.  cfeed_x, cfedd_y, cfeed_z are the unshifted positions for feed
+#calculations.
+# --------------------------------------------------------------------------
+pxyzcout      #Perform calls for mapping coordinates and shifts
+      pplane_mod
+      if cuttype = one, pxyzcout0                   #Turning
+      if abs(cuttype) = two                         #Right/Left Face cut
+      | cuttype = three, pxyzcout2                  #Cross cut
+      if cuttype = four, pxyzcout4                  #Y axis substitution
+      if cuttype = five, pxyzcout5                  #Multisurf Rotary
+      #C axis control modifications
+      if posttype <> two,
+        [
+        pcoutrev
+        cabs = c_wnd
+        if c_axistype > one | millcc,
+          [
+          pindxcalc
+          if c_axistype = three,
+            [
+            #Check if in tolerance
+            cdelta = frac(abs(cabs)/ctable)
+            if cdelta > ixtol & cdelta < 1-ixtol,
+              result = mprint(sindxerror)
+            indx_out = cabs
+            ]
+          if c_axistype = two, #Signed direction calculation
+            [
+            #Warn if a move greater than 360
+            if abs(prvc_wnd - c_wnd) > 360, result = mprint(ssignerror)
+            ]
+          ]
+        if y_axis = zero,
+          [
+          if cir_at_zero = one, gcode = one #only C is moving
+          if cir_at_zero = m_one & (xa < zero | prv_xa < zero), c_ax_flp = one
+          else, c_ax_flp = zero
+          ]
+        if millcc,
+          [
+          if fmtrnd(cabs) = 360, cabs = zero  #Always try to start at zero
+          if cutpos2 > zero &  cutpos2 < four,
+            [
+            if abs(cuttype) = two, ppolar_fcyc
+            ]
+          ]
+        ]
+      pfcalc
+
+pxyzcout0       #Lathe and machine coordinates
+      cfeed_x = vequ(xa)
+      csav = c
+      pax_shift
+      ipr_type = zero
+
+pxyzcout4       #Calculations for Y axis substitution (mapped)
+      cfeed_x = xa + (rotdia/two)
+      cfeed_y = zero
+      cfeed_z = za
+      csav = ya * (360 / (pi * rotdia))
+      pax_shift
+      if millcc, ipr_type = zero
+      else, ipr_type = one
+
+pxyzcout2       #Polar conversion, Cross cut, Right/Left Face cut
+      #Drill polar is toolplane drilling toward center
+      #if not a coincident axis (Face cut)
+      if (y_axis | (opcode = three & abs(cuttype) <> two)), pxyzcout0
+      else,
+        [
+        cfeed_x = sqrt(xa^2 + ya^2)
+        cfeed_y = zero
+        cfeed_z = za
+        if opcode = three & cuttype = three, csav = c
+        else, csav = atan2(ya, xa) + c
+        pax_shift
+        ipr_type = one
+        if not(millcc & abs(cuttype) = two),
+          [
+          if fmtrnd(xa) = zero & fmtrnd(ya) = zero & opcode <> three,
+            pnt_at_zero = one
+          ]
+        ]
+
+pxyzcout5       #Multisurf rotary axis motion
+      csav = atan2(vtooly, vtoolz)
+      axisx = vequ(caxisx)
+      xa = rotp (-csav, xa)
+      cfeed_x = vequ(xa)
+      pax_shift
+      csav = csav + c
+      ipr_type = one
+
+ppolar_fcyc     #Output values for face, polar conversion cycle
+      xabs = (xa + dia_shift) * dia_mult
+      yabs = zero
+      zabs = (za + z_shift) * z_mult
+      cabs = (ya + y_shift) * y_mult
+      ipr_type = zero
+
+pax_shift       #Apply multiplier and shift positions, csav was recalculated
+      xabs = (cfeed_x + dia_shift) * dia_mult
+      yabs = (cfeed_y + y_shift) * y_mult
+      zabs = (cfeed_z + z_shift) * z_mult
+      #Apply axis shift for lower turrets
+      if posttype <> two & (lathtype = zero | lathtype = two),
+        csav = csav + c_shift
+      if posttype = two,
+        [
+        yabs = zero
+        csav = zero
+        ]
+
+pplane_mod    #Modify the multiplier based on plane, see psw_str_mult
+      if plane = zero,
+        [
+        dia_mult = prv_dia_mult * pl_ax_m0x
+        y_mult = prv_y_mult * pl_ax_m0y
+        z_mult = prv_z_mult * pl_ax_m0z
+        ]
+      else,
+        [
+        if plane = one,
+          [
+          dia_mult = prv_dia_mult * pl_ax_m1x
+          y_mult = prv_y_mult * pl_ax_m1y
+          z_mult = prv_z_mult * pl_ax_m1z
+          ]
+        else, #plane = two
+          [
+          dia_mult = prv_dia_mult * pl_ax_m2x
+          y_mult = prv_y_mult * pl_ax_m2y
+          z_mult = prv_z_mult * pl_ax_m2z
+          ]
+        ]
+
+pcoutrev        #Rotary axis revolution calculation (Modify for wind-up)
+      if cir_at_zero = one,
+        [
+        #Arcs at center position the c axis
+        if cuttype = -2 | cuttype = three,
+        csav = czero_csav - sweep
+        else, csav = czero_csav + sweep
+        ]
+      #C does not move going to CL
+      if pnt_at_zero, csav = prv_csav
+      cdelta = fmtrnd(csav) - prv_csav  #This calculates once, for rev
+      while abs(cdelta) > ctol, #If motion exceeds ctol, add wind-up
+        [
+        if cdelta > zero,
+          [
+          rev = rev - one
+          cdelta = cdelta - 360
+          ]
+        else,
+          [
+          rev = rev + one
+          cdelta = cdelta + 360
+          ]
+        ]
+      if cuttype <> four, c_wnd = rev * 360 + csav
+      else, c_wnd = sav_rev * 360 + csav
+      !csav
+      @c_wnd
+      #Now switch to c_wnd which is the absolute winding C calculation
+      #Modify for shortest direction if toolchange or toolplane
+      #but not with axis subs
+      if c_axistype <> three,
+        [
+        if abs(prvc_wnd - c_wnd) > 180
+          & (toolchng | (y_axis & cuttype < four)),
+          [
+          while abs(prvc_wnd - c_wnd) > 180,
+            [
+            if prvc_wnd > c_wnd, rev = rev + one
+            else, rev = rev - one
+            c_wnd = rev * 360 + csav
+            ]
+          @c_wnd
+          ]
+        ]
+
+pindxcalc       #Index move calculations, direction is shortest exc. Asub
+      if pnt_at_zero | cdelta = zero, indx_mc = prv_indx_mc
+      else,
+        [
+        cdelta = fmtrnd(c_wnd) - prvc_wnd
+        if cuttype = four, #Just look at the direction
+          [
+          if cdelta >= zero, indx_mc = one
+          else, indx_mc = zero
+          ]
+        else,
+          [
+          #Phase shift delta 10 revolutions, check odd/even for direction
+          if frac(int((cdelta + 3600)/180)/two), indx_mc = zero
+          else, indx_mc = one
+          ]
+        ]
+      #Set range 0-360
+      while cabs < zero, cabs = cabs + 360
+      while cabs > 360, cabs = cabs - 360
+
+pfcalc          #Feedrate calculations, gcode 0 does not evaluate
+      if abs(c_wnd-prvc_wnd)<vtol | c_axistype=three | drillcur
+      | ipr_type=zero | prv_pnt_at_zero | gcode = zero, pfcalc_u_min
+      else, pfclc_deg_inv
+
+pfcalc_u_min    #Feedrate unit/min
+      feed = fr_pos
+      if feed > maxfeedpm, feed = maxfeedpm
+      prvfrdeg = feed
+
+pfclc_deg_inv   #Feedrate deg/min, xa and ya are assumed relative to origin
+      #Average last radius to current radius
+      ldelta = ((cfeed_x+prv_cfeed_x)/two)^two+((cfeed_y+prv_cfeed_y)/two)^two
+      circum = sqrt(ldelta) * two * pi
+      if circum = zero, circum = c9k          #Don't allow Zero
+      ldelta = (cfeed_x-prv_cfeed_x)^two+(cfeed_y-prv_cfeed_y)^two
+      ldelta = sqrt(ldelta+(cfeed_z-prv_cfeed_z)^two)
+      cdelta = ((abs(c_wnd - prvc_wnd))/360)*circum
+      if ldelta = zero, cldelta = cdelta
+      else, cldelta = sqrt(cdelta^two + ldelta^two)
+      if cldelta = zero, cldelta = c9k
+      #Feedrate deg/min control and calculation
+      frdeg = abs(cdelta/cldelta) * abs(fr_pos * (360/circum))
+      if abs(frdeg - prvfrdeg) > frdegstp | ipr_type <> prv_ipr_type,
+        [
+        #Control output of frdeg
+        prvfrdeg = frdeg
+        feed = frdeg
+        ]
+      if fmtrnd(frdeg) = zero, feed = fr_pos
+      if frdeg > maxfrdeg, feed = maxfrdeg
+
+#Incremental calculations
+ps_inc_calc     #Incremental calculations, start
+      xia = fmtrnd(xabs)
+      yia = fmtrnd(yabs)
+      zia = fmtrnd(zabs)
+      xinc = vsub (xia, prv_xia)
+      if posttype <> two, ps_cinc_calc
+
+ps_cinc_calc    #Incremental calculations, start rotary
+      cia = fmtrnd(cabs)
+      cinc = cia - prv_cia
+
+pe_inc_calc     #Incremental calculations, end
+      prvc_wnd = fmtrnd(c_wnd)      #Avoid updating until called explicitly
+      !cfeed_x, !cfeed_y, !cfeed_z, !ipr_type  #These are used in pxyzcout
+      !x, !y, !z, !xa, !ya, !za
+      !xia, !yia, !zia, !cia
+
+# --------------------------------------------------------------------------
+# Mapping routines, maps input to basic machine coordinates (side view)
+# --------------------------------------------------------------------------
+pmatrix_su      #Setup mapping matrix
+      hmtx1 = matt(m1)
+      if cuttype <> one, hmtx1 = mmul(hmtx1, smtx1)
+      if cuttype = one, mmtx1 = matt(m1)
+      if cuttype = two, mmtx1 = matt(smtx1)
+      if cuttype = -2, mmtx1 = matt(bmtx1)
+      if cuttype = three | cuttype = five, mmtx1 = matt(cmtx1)
+      if cuttype = four, mmtx1 = matt(amtx1)
+      if cuttype <> one, mmtx1 = mmul(mmtx1, smtx1)
+
+pshft_map_xc    #Remove workshift and map to lathe coordinates, center
+      xca = vadd (xc, tox)  #Always shift to origin
+      if plane = one,
+        [
+        result = xca
+        xca = zca
+        zca = yca
+        yca = result
+        ]
+      if plane = two,
+        [
+        result = yca
+        yca = zca
+        zca = result
+        ]
+      xca = vmap (xca, mmtx1)
+
+pshft_map_ijk    #Remove workshift and map to lathe coordinates, ijk
+      if arctype = one, #Absolute is shifted
+        [
+        if wcs_origin, iout = vadd (i, tox)
+        else, iout = vequ (i)
+        ]
+      else, iout = vequ (i)
+      iout = vmap (iout, mmtx1)
+
+pshft_map_xa     #Remove workshift and map to lathe coordinates, xyz
+      if wcs_origin, xa = vadd (copy_x, tox)
+      else, xa = vequ (copy_x)
+      xa = vmap (xa, mmtx1)
+
+pmap_home     #Set the location for home position
+      xa = vequ(xh)
+      if map_home,
+        [
+        if wcs_origin, xa = vadd(xa, tox)
+        xa = vmap(xa, hmtx1)
+        ]
+      pplane_mod
+      pxyzcout0 #basic toolplane positioning
+
+pmap_plane    #Map NCI plane to machine plane
+      mach_plane = plane
+      #Cross
+      if cuttype=3 & plane<two, mach_plane = abs(plane - one)
+      #Top
+      if (abs(cuttype)<=one | abs(cuttype)>=4),
+      mach_plane = plane - one
+      if mach_plane = m_one, mach_plane = two
+
+# --------------------------------------------------------------------------
+# NCI file pre-read look ahead routines
+# Build the toolchange buffer, sets cycle and turret flags
+# --------------------------------------------------------------------------
+pwrttparam      #Information from parameters
+      if opcode = 104, result = fprm (opcode)
+
+pwrtt           #Buffer toolchange information, tooltable = 3 calls on 1003
+      if gcode = 1001, psetup
+      pcut_cctyp
+      if opcode=104 | opcode=105 | opcode=three | opcode=16, cc_pos = zero
+      if gcode <> 1001, plast_recd
+      pcur_recd
+      if gcode <> 1003, cc_pos = zero
+      !opcode, !tool_op
+      if gcode = 1003,
+        [
+        size1 = rbuf (one, zero)
+        rc1 = one
+        if rc1 < size1, preadcur_nxt
+        if cc_1013 = zero, cc_pos = zero
+        ]
+
+pcur_recd       #Write to the current tool record
+      c1_gcode = gcode
+      pmatrix_su
+      pset_turret
+      pmap_home
+      c1_xh = vequ(xabs)
+      c1_tox = vmap (tox, mmtx1)
+      c1_cc_pos = cc_pos
+      if gcode <> 1003, c1_tool = abs(t)
+      else, c1_tool = zero
+      c1_tloffno = tloffno
+      c1_maxss = maxss
+      c1_ss = abs(ss)
+      if cool_w_spd = zero, c1_spdir = spdir + one
+      else, c1_spdir = (spdir + one) + (fsg2(coolant) * three)
+      c1_css_actv = css_actv
+      c1_fr_pos = fr_pos
+      c1_ipr_actv = ipr_actv
+      c1_coolant = coolant
+      c1_nextdc = nextdc
+      c1_posttype = posttype
+      c1_cuttype = cuttype
+      c1_lathtype = lathtype
+      c1_gcodecc = gcodecc
+      c1_lathecc = lathecc
+      c1_millcc = millcc
+      c1_y_axis = y_axis
+      if opcode = 104,
+        [
+        if face_thd <> two, x_min = abs(xmaj_thd)
+        else,
+          [
+          if abs(zstrt_thd) > abs(zend_thd), x_min = abs(zstrt_thd)
+          else, x_min = abs(zend_thd)
+          ]
+        x_max = x_min
+        ]
+      c1_gcode = wbuf (one, wc1)
+
+plast_recd      #Update the last record(s) for min-max and point
+      rc1 = wc1 - one
+      c1_gcode = rbuf (one, rc1)
+      if prv_opcode <> 104,
+        [
+        c1_x_min = x_min
+        c1_x_max = x_max
+        ]
+      rc1 = wc1 - one               #rc1 is used to write also
+      c1_gcode = wbuf (one, rc1)
+
+pcut_cctyp      #Find the type of cut for the tool buffer
+                #y_axis
+                #posttype
+                #cuttype
+                #lathtype
+      y_axis = zero
+      cuttype = zero
+      if posttype = two, cuttype = one
+      else,
+        [
+        if mill5, cuttype = five
+        else,
+          [
+          if rotary_type = one, cuttype = four
+          else,
+            [
+            @m1, @m2, @m3, @m7, @m8, @m9
+            if m7 = m_one & m8 = zero & m9 = zero, cuttype = -2
+            if m7 = one & m8 = zero & m9 = zero, cuttype = two
+            if m1 = m_one & m2 = zero & m3 = zero, cuttype = three
+            if rotary_type = three, y_axis = one
+            ]
+          ]
+        ]
+      lathtype = lturret + spindle_no * two
+      #Check for errors
+      if rotary_type,
+        [
+        if (abs(cuttype) = two & rotary_axis <> three)
+        | (cuttype = three & rotary_axis <> one),
+          result = mprint(saxiserror)
+        if cuttype = four & tlplnno <> one, result = mprint(stoperror)
+        ]
+      else,
+        [
+        if cuttype = zero, result = mprint(scutterror)
+        ]
+      #gcodecc, determine G74/G75 direction during processing
+      #lathecc
+      #millcc
+      gcodecc = zero
+      lathecc = zero
+      if tool_op > 201,
+        [
+        if tool_op = 202 | tool_op = 203,
+          [
+          gcodecc = one
+          lathecc = one
+          if tool_op = 203, lathecc = m_one
+          ]
+        else,
+          [
+          if tool_op = 204 | tool_op = 205,
+            [
+            gcodecc = two
+            lathecc = one
+            if tool_op = 205, lathecc = m_one
+            ]
+          else,
+            [
+            if tool_op = 206 | tool_op = 207,
+              [
+              gcodecc = three
+              lathecc = two
+              if tool_op = 207, lathecc = -2
+              ]
+            else,
+              [
+              if tool_op = 208,
+                [
+                gcodecc = four
+                lathecc = three
+                ]
+              ]
+            ]
+          ]
+        ]
+      if mi4<>zero & opcode <> three & (cuttype=four | abs(cuttype)=two),
+         millcc = mi4
+      else, millcc = zero
+
+psetup          #Setup post based on NCI settings
+      home_type = mi1
+      sbufname3 = spathnci + snamenci + sextext
+      spathext = spathnci
+      snameext = snamenci
+      #Set metric defaults
+      if met_tool = one,
+        [
+        conversion = 1000
+        ltol = ltol_m
+        vtol = vtol_m
+        maxfeedpm = maxfeedpm_m
+        lcc_move = lcc_move_m
+        ]
+
+      #Setup for old or new style canned cycles
+      if old_new_sw = one,
+        [
+        result = newfs (16, thddepth)
+        result = newfs (16, thdfirst)
+        ]
+      else,
+        [
+        result = nwadrs (stra, thdang)
+        result = nwadrs (stri, thdrdlt)
+        result = nwadrs (strk, thddepth)
+        result = nwadrs (strd, thdfirst)
+        #Lathe canned cycle old style conversion
+        result = nwadrs (strd, depthcc)
+        result = nwadrs (strd, ncutscc)
+        result = nwadrs (stri, g73x)
+        result = nwadrs (strk, g73z)
+        result = nwadrs (stri, grvspcc)
+        result = nwadrs (strk, grvdpcc)
+        ]
+      #Setup for arctype setting
+      if arctype = one | arctype = four,
+        [
+        result = newfs(two, i)
+        result = newfs(two, j)
+        result = newfs(two, k)
+        result = newfs(two, iout)
+        result = newfs(two, jout)
+        result = newfs(two, kout)
+        ]
+      else,
+        [
+        result = newfs(three, i)
+        result = newfs(three, j)
+        result = newfs(three, k)
+        result = newfs(three, iout)
+        result = newfs(three, jout)
+        result = newfs(three, kout)
+        ]
+      result = nwadrs(str_cax_abs, cabs)
+      result = nwadrs(str_cax_inc, cinc)
+      result = nwadrs(str_index, indx_out)
+      sc_minus = str_cax_abs + sc_minus
+
+# --------------------------------------------------------------------------
+# Turret and cut type change setup, do not edit
+# --------------------------------------------------------------------------
+pset_turret     #Set the machine conditions and mapping based on the turret
+      if lathtype = one | use_only_tl, pltype1
+      else,
+        [
+        if lathtype = zero, pltype0
+        else,
+          [
+          if lathtype = two, pltype2
+          else, pltype3
+          ]
+        ]
+      psw_str_mult
+
+pltype0         #Bottom turret/Left spindle
+      if cuttype = one,
+        [
+        #Lathe
+        pcuttypldrl
+        max_speed = max_speedl0
+        min_speed = min_speedl0
+        sw_string = scase_bl_c1
+        ]
+      else,
+        [
+        #Mill
+        pcuttypmdrl
+        max_speed = max_speedm0
+        min_speed = min_speedm0
+        sw_string = scase_bl_c2 #case two is the default
+        if cuttype = -2, sw_string = scase_bl_c_2
+        if cuttype = three, sw_string = scase_bl_c3
+        if cuttype = four & abs(c1_millcc) = one, sw_string = scase_bl_c4c
+        if cuttype = four & c1_millcc = zero, sw_string = scase_bl_c4
+        if cuttype = five, sw_string = scase_bl_c5
+        ]
+
+pltype1         #Top turret/Left spindle
+      if cuttype = one,
+        [
+        #Lathe
+        pcuttypldrl
+        max_speed = max_speedl1
+        min_speed = min_speedl1
+        sw_string = scase_tl_c1
+        ]
+      else,
+        [
+        #Mill
+        pcuttypmdrl
+        max_speed = max_speedm1
+        min_speed = min_speedm1
+        sw_string = scase_tl_c2 #case two is the default
+        if cuttype = -2, sw_string = scase_tl_c_2
+        if cuttype = three, sw_string = scase_tl_c3
+        if cuttype = four & abs(c1_millcc) = one, sw_string = scase_tl_c4c
+        if cuttype = four & c1_millcc = zero, sw_string = scase_tl_c4
+        if cuttype = five, sw_string = scase_tl_c5
+        ]
+
+pltype2         #Bottom turret/Right spindle
+      if cuttype = one,
+        [
+        #Lathe
+        pcuttypldrl
+        max_speed = max_speedl2
+        min_speed = min_speedl2
+        sw_string = scase_br_c1
+        ]
+      else,
+        [
+        #Mill
+        pcuttypmdrl
+        max_speed = max_speedm2
+        min_speed = min_speedm2
+        sw_string = scase_br_c2 #case two is the default
+        if cuttype = -2, sw_string = scase_br_c_2
+        if cuttype = three, sw_string = scase_br_c3
+        if cuttype = four & abs(c1_millcc) = one, sw_string = scase_br_c4c
+        if cuttype = four & c1_millcc = zero, sw_string = scase_br_c4
+        if cuttype = five, sw_string = scase_br_c5
+        ]
+
+pltype3         #Top turret/Right spindle
+      if cuttype = one,
+        [
+        #Lathe
+        pcuttypldrl
+        max_speed = max_speedl3
+        min_speed = min_speedl3
+        sw_string = scase_tr_c1
+        ]
+      else,
+        [
+        #Mill
+        pcuttypmdrl
+        max_speed = max_speedm3
+        min_speed = min_speedm3
+        sw_string = scase_tr_c2 #case two is the default
+        if cuttype = -2, sw_string = scase_tr_c_2
+        if cuttype = three, sw_string = scase_tr_c3
+        if cuttype = four & abs(c1_millcc) = one, sw_string = scase_tr_c4c
+        if cuttype = four & c1_millcc = zero, sw_string = scase_tr_c4
+        if cuttype = five, sw_string = scase_tr_c5
+        ]
+
+psw_str_mult    #Apply sw_string to variables and strings
+      #c axis type
+      c_axistype = plcval (sw_string, 8)
+      #reverse spindle
+      spd_rev = plcval (sw_string, 7)
+      #plane 0
+      rslt_plc = plcval (sw_string, 6)
+       if rslt_plc = zero,
+        [
+        sg02 = sxg02
+        sg03 = sxg03
+        sg41 = sxg41
+        sg42 = sxg42
+        ]
+      else,
+        [
+        sg02 = sxg03
+        sg03 = sxg02
+        sg41 = sxg42
+        sg42 = sxg41
+        ]
+      #plane 1
+      rslt_plc = plcval (sw_string, five)
+      if rslt_plc = zero,
+        [
+        sg02_1 = sxg02
+        sg03_1 = sxg03
+        sg41_1 = sxg41
+        sg42_1 = sxg42
+        ]
+      else,
+        [
+        sg02_1 = sxg03
+        sg03_1 = sxg02
+        sg41_1 = sxg42
+        sg42_1 = sxg41
+        ]
+      #plane 2
+      rslt_plc = plcval (sw_string, four)
+      if rslt_plc = zero,
+        [
+        sg02_2 = sxg02
+        sg03_2 = sxg03
+        sg41_2 = sxg41
+        sg42_2 = sxg42
+        ]
+      else,
+        [
+        sg02_2 = sxg03
+        sg03_2 = sxg02
+        sg41_2 = sxg42
+        sg42_2 = sxg41
+        ]
+      #plane 0
+      rslt_plc = plcval (sw_string, three)
+      rslt_upd = updstr (swstr)
+      sg17 = swstr
+      #plane 1
+      rslt_plc = plcval (sw_string, two)
+      rslt_upd = updstr (swstr)
+      sg19 = swstr
+      #plane 2
+      rslt_plc = plcval (sw_string, one)
+      rslt_upd = updstr (swstr)
+      sg18 = swstr
+      #plane 0, x axis
+      rslt_plc = plcval (sw_string, m_one)
+      pl_ax_m0x = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -2)
+      pl_ax_m0y = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -3)
+      pl_ax_m0z = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -4)
+      pl_ax_m1x = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -5)
+      pl_ax_m1y = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -6)
+      pl_ax_m1z = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -7)
+      pl_ax_m2x = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -8)
+      pl_ax_m2y = -((rslt_plc * two) - one)
+      rslt_plc = plcval (sw_string, -9)
+      pl_ax_m2z = -((rslt_plc * two) - one)
+
+# --------------------------------------------------------------------------
+# Numbered questions for Mastercam --  Used by Lathe 9
+# --------------------------------------------------------------------------
+38. Rapid feedrate? 250
+1538. Rapid feedrate (metric)? 10000.0
+
+80. Communications port number for receive and transmit (1 or 2) ? 2
+81. Data rate (110,150,300,600,1200,2400,4800,9600,14400,19200,38400)? 1200
+82. Parity (E/O/N)? E
+83. Data bits (7 or 8)? 7
+84. Stop bits (1 or 2)? 2
+85. Strip line feeds? N
+86. Delay after end of line (seconds)? 0
+87. Ascii, Eia, or Binary (A/E/B)? A
+88. Echo keyboard to screen in terminal emulation? N
+89. Strip carriage returns? N
+
+90. Drive and subdirectory for NC files?
+91. Name of executable post processor? MPL
+92. Name of reverse post processor? RPL
+93. Reverse post PST file name? RPL_GEN
+
+100. Number of places BEFORE the decimal point for sequence numbers? -1
+101. Number of places AFTER the decimal point for sequence numbers? -1
+103. Maximum spindle speed? 3600
+108. Name of associated Mill post? MPLFAN
+
+161. Enable Home Position button? y
+162. Enable Reference Point button? y
+163. Enable Misc. Values button? y
+164. Enable Rotary Axis button? y
+165. Enable Tool Plane button? y
+166. Enable Construction Plane button? y
+167. Enable Tool Display button? y
+168. Check tplane during automatic work origin creation? y
+
+# --------------------------------------------------------------------------
+# Default Miscellaneous Real Values, see lathe defaults below
+# --------------------------------------------------------------------------
+201. Default miscellaneous real variable 1 (mr1)? 0.0
+202. Default miscellaneous real variable 2 (mr2)? 0.0
+203. Default miscellaneous real variable 3 (mr3)? 0.0
+204. Default miscellaneous real variable 4 (mr4)? 0.0
+205. Default miscellaneous real variable 5 (mr5)? 0.0
+206. Default miscellaneous real variable 6 (mr6)? 0.0
+207. Default miscellaneous real variable 7 (mr7)? 0.0
+208. Default miscellaneous real variable 8 (mr8)? 0.0
+209. Default miscellaneous real variable 9 (mr9)? 0.0
+210. Default miscellaneous real variable 10 (mr10)? 0.0
+
+# --------------------------------------------------------------------------
+# Default Miscellaneous Real Values (METRIC)
+# --------------------------------------------------------------------------
+1601. Default miscellaneous real variable 1 (mr1) (metric)? 0.0
+1602. Default miscellaneous real variable 2 (mr2) (metric)? 0.0
+1603. Default miscellaneous real variable 3 (mr3) (metric)? 0.0
+1604. Default miscellaneous real variable 4 (mr4) (metric)? 0.0
+1605. Default miscellaneous real variable 5 (mr5) (metric)? 0.0
+1606. Default miscellaneous real variable 6 (mr6) (metric)? 0.0
+1607. Default miscellaneous real variable 7 (mr7) (metric)? 0.0
+1608. Default miscellaneous real variable 8 (mr8) (metric)? 0.0
+1609. Default miscellaneous real variable 9 (mr9) (metric)? 0.0
+1610. Default miscellaneous real variable 10 (mr10) (metric)? 0.0
+
+# --------------------------------------------------------------------------
+# Enable/Disable Miscellaneous Real Variable switches
+# --------------------------------------------------------------------------
+1611. Enable miscellaneous real variable 1? y
+1612. Enable miscellaneous real variable 2? y
+1613. Enable miscellaneous real variable 3? y
+1614. Enable miscellaneous real variable 4? y
+1615. Enable miscellaneous real variable 5? y
+1616. Enable miscellaneous real variable 6? y
+1617. Enable miscellaneous real variable 7? y
+1618. Enable miscellaneous real variable 8? y
+1619. Enable miscellaneous real variable 9? y
+1620. Enable miscellaneous real variable 10? y
+
+# --------------------------------------------------------------------------
+# Default Miscellaneous Integer Values, see lathe defaults below
+# --------------------------------------------------------------------------
+301. Work coordinate (-1=REF, 0=G50, 1=HOME, 2=G54's)? 2
+302. Top Level absolute/incremental (0=ABS, 1=INC)? 0
+303. G28 or G30 return (0=G28, 1=G30)? 0
+304. Can Conversion Cycles (Mill 1 or -1)? 0
+305. Default miscellaneous integer variable 5 (mi5)? 0
+306. Default miscellaneous integer variable 6 (mi6)? 0
+307. Default miscellaneous integer variable 7 (mi7)? 0
+308. Default miscellaneous integer variable 8 (mi8)? 0
+309. Default miscellaneous integer variable 9 (mi9)? 0
+310. Default miscellaneous integer variable 10 (mi10)? 0
+
+# --------------------------------------------------------------------------
+# Enable/Disable Miscellaneous Integer Variable switches
+# --------------------------------------------------------------------------
+1621. Enable miscellaneous integer variable 1? y
+1622. Enable miscellaneous integer variable 2? y
+1623. Enable miscellaneous integer variable 3? y
+1624. Enable miscellaneous integer variable 4? y
+1625. Enable miscellaneous integer variable 5? y
+1626. Enable miscellaneous integer variable 6? y
+1627. Enable miscellaneous integer variable 7? y
+1628. Enable miscellaneous integer variable 8? y
+1629. Enable miscellaneous integer variable 9? y
+1630. Enable miscellaneous integer variable 10? y
+
+# --------------------------------------------------------------------------
+# Configuration File association parameters (default is "y")
+# --------------------------------------------------------------------------
+#400. Name of associated cfg file?
+401. Read SYSTEM COLORS section? y
+402. Read ALLOCATIONS section? y
+403. Read TOLERANCES section? y
+404. Read DATA PATHS section? y
+405. Read COMMUNICATIONS section? y
+406. Read DRAFT SETTINGS section? y
+407. Read MISCELLANEOUS section? y
+408. Read NC SETTINGS section? y
+409. Read DIALOG SCRIPTS section? y
+410. Read DESIGN SETTINGS section? y
+411. Read PLOTTER SETTINGS section? y
+412. Read ALT-KEY ASSIGNMENTS section? y
+413. Read CAD section? y
+414. Read START/EXIT section? y
+415. Read SCREEN section? y
+416. Read FILE NAMES section? y
+
+1501. Insert parameter information in the ascii NCI? y
+1502. Write operation information to binary file (.ops)? n
+
+1520. Display a warning when cutter compensation in control simulation finds an error? n
+
+# Do NOT manually change the answer for Q.1999 !
+1999. Product major version number that post supports? 9
+
+3001. Machine acceleration? 2
+3002. Timing size? .1
+
+3010. Minimum inch/revolution feedrate? .002
+3011. Minimum mm/revolution feedrate? .05
+
+3020. Enable canned roughing turning (Post must support these operations)? y
+3021. Enable canned roughing pattern repeat? y
+3022. Enable canned grooving? y
+3023. Enable canned threading? y
+3024. Enable canned finish? y
+
+3040. Enable canned groove wall taper? n
+3041. Enable canned groove radius on corners? n
+3042. Enable canned groove radius on chamfer? n
+3043. Enable canned groove rough pecking? y
+3044. Enable canned groove rough depth cuts?y
+3045. Enable canned groove dwell? n
+3046. Enable canned groove chamfer on corners? n
+
+3050. Enable canned thread equal depths? y
+3051. Enable canned thread equal area? y
+3052. Enable canned thread multiple starts? y
+3053. Enable canned thread anticipated pulloff? y
+
+# --------------------------------------------------------------------------
+# Lathe misc reals
+# --------------------------------------------------------------------------
+#3201. Default lathe miscellaneous real variable 1 (mr1)? 0.0
+#3202. Default lathe miscellaneous real variable 2 (mr2)? 0.0
+#3203. Default lathe miscellaneous real variable 3 (mr3)? 0.0
+#3204. Default lathe miscellaneous real variable 4 (mr4)? 0.0
+#3205. Default lathe miscellaneous real variable 5 (mr5)? 0.0
+#3206. Default lathe miscellaneous real variable 6 (mr6)? 0.0
+#3207. Default lathe miscellaneous real variable 7 (mr7)? 0.0
+#3208. Default lathe miscellaneous real variable 8 (mr8)? 0.0
+#3209. Default lathe miscellaneous real variable 9 (mr9)? 0.0
+#3210. Default lathe miscellaneous real variable 10 (mr10)? 0.0
+
+# --------------------------------------------------------------------------
+# Enable/Disable LATHE Miscellaneous Real Variable switches
+# --------------------------------------------------------------------------
+1631. Enable lathe miscellaneous real variable 1? y
+1632. Enable lathe miscellaneous real variable 2? y
+1633. Enable lathe miscellaneous real variable 3? y
+1634. Enable lathe miscellaneous real variable 4? y
+1635. Enable lathe miscellaneous real variable 5? y
+1636. Enable lathe miscellaneous real variable 6? y
+1637. Enable lathe miscellaneous real variable 7? y
+1638. Enable lathe miscellaneous real variable 8? y
+1639. Enable lathe miscellaneous real variable 9? y
+1640. Enable lathe miscellaneous real variable 10? y
+
+# --------------------------------------------------------------------------
+# Lathe misc integers
+# --------------------------------------------------------------------------
+#3301. Default lathe miscellaneous integer variable 1 (mi1)? 0
+#3302. Default lathe miscellaneous integer variable 2 (mi2)? 0
+#3303. Default lathe miscellaneous integer variable 3 (mi3)? 0
+#3304. Default lathe miscellaneous integer variable 4 (mi4)? 0
+#3305. Default lathe miscellaneous integer variable 5 (mi5)? 0
+#3306. Default lathe miscellaneous integer variable 6 (mi6)? 0
+#3307. Default lathe miscellaneous integer variable 7 (mi7)? 0
+#3308. Default lathe miscellaneous integer variable 8 (mi8)? 0
+#3309. Default lathe miscellaneous integer variable 9 (mi9)? 0
+#3310. Default lathe miscellaneous integer variable 10 (mi10)? 0
+
+# --------------------------------------------------------------------------
+# LATHE Default Miscellaneous Real Values  (METRIC)
+# --------------------------------------------------------------------------
+#3601. Default lathe miscellaneous real variable 1 (mr1) (metric)? 0.0
+#3602. Default lathe miscellaneous real variable 2 (mr2) (metric)? 0.0
+#3603. Default lathe miscellaneous real variable 3 (mr3) (metric)? 0.0
+#3604. Default lathe miscellaneous real variable 4 (mr4) (metric)? 0.0
+#3605. Default lathe miscellaneous real variable 5 (mr5) (metric)? 0.0
+#3606. Default lathe miscellaneous real variable 6 (mr6) (metric)? 0.0
+#3607. Default lathe miscellaneous real variable 7 (mr7) (metric)? 0.0
+#3608. Default lathe miscellaneous real variable 8 (mr8) (metric)? 0.0
+#3609. Default lathe miscellaneous real variable 9 (mr9) (metric)? 0.0
+#3610. Default lathe miscellaneous real variable 10 (mr10) (metric)? 0.0
+
+# --------------------------------------------------------------------------
+# Enable/Disable LATHE Miscellaneous Integer Variable switches
+# --------------------------------------------------------------------------
+1641. Enable lathe miscellaneous integer variable 1? y
+1642. Enable lathe miscellaneous integer variable 2? y
+1643. Enable lathe miscellaneous integer variable 3? y
+1644. Enable lathe miscellaneous integer variable 4? y
+1645. Enable lathe miscellaneous integer variable 5? y
+1646. Enable lathe miscellaneous integer variable 6? y
+1647. Enable lathe miscellaneous integer variable 7? y
+1648. Enable lathe miscellaneous integer variable 8? y
+1649. Enable lathe miscellaneous integer variable 9? y
+1650. Enable lathe miscellaneous integer variable 10? y
